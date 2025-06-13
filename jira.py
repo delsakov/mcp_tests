@@ -460,5 +460,114 @@ async def process_text_and_create_jira_advanced(text: str = Body(..., embed=True
             "data_used": extracted_json
         }
 
+
+A. The New API Response Strategy
+Your API endpoint needs to return a structured response that indicates its status.
+
+Status: SUCCESS: The ticket was created. The response includes the jira_key.
+
+Status: NEEDS_CLARIFICATION: The system needs more information. The response includes a conversation_id to maintain state and a question for the user (e.g., a list of Epics to choose from).
+
+Status: ERROR: An unrecoverable error occurred.
+
+B. State Management (Using a Cache)
+To handle a multi-step conversation, you need to temporarily store the context of the initial request. A cache like Redis is perfect for this.
+
+# In a new file, e.g., conversation_cache.py
+import redis
+import json
+import uuid
+
+# This should be a single client instance for your app
+redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+
+def cache_conversation_context(user_text: str, selected_team: dict | None) -> str:
+    """Stores the context and returns a unique conversation ID."""
+    conversation_id = str(uuid.uuid4())
+    context = {"user_text": user_text, "selected_team": selected_team}
+    # Cache for 10 minutes
+    redis_client.set(f"conversation:{conversation_id}", json.dumps(context), ex=600)
+    return conversation_id
+
+def get_conversation_context(conversation_id: str) -> dict | None:
+    """Retrieves context from the cache."""
+    context_json = redis_client.get(f"conversation:{conversation_id}")
+    return json.loads(context_json) if context_json else None
+
+C. Update the Orchestrator Endpoint for Conversation
+The endpoint now handles two scenarios: an initial request and a follow-up request that includes a conversation_id.
+
+# In your main.py
+import asyncio
+from fastapi import FastAPI, HTTPException, Body, Header
+from typing import Optional
+# ... other imports from the original document
+# ... import cache and new Pydantic models
+
+# --- New Pydantic Models ---
+class FollowUpRequest(BaseModel):
+    conversation_id: str
+    selected_epic_key: str
+
+class OrchestratorRequest(BaseModel):
+    user_text: str
+    follow_up: Optional[FollowUpRequest] = None
+
+# In a real app, you would fetch this from your DB
+# from database import fetch_all_active_epics 
+
+@app.post("/process-and-create-jira-conversational/")
+async def process_text_conversational(request: OrchestratorRequest):
+    """
+    Handles both initial requests and follow-up conversational turns.
+    """
+    # --- Scenario 1: Follow-up request ---
+    if request.follow_up:
+        context = get_conversation_context(request.follow_up.conversation_id)
+        if not context:
+            raise HTTPException(status_code=404, detail="Conversation not found or expired.")
+
+        # Manually create the epic and team context from the user's answer
+        selected_epic = {"key": request.follow_up.selected_epic_key, "summary": "User Selected"}
+        selected_team = context.get("selected_team")
+        user_text = context.get("user_text")
+        
+        # Now, proceed to Step 2 and 3 as normal...
+
+    # --- Scenario 2: Initial request ---
+    else:
+        user_text = request.user_text
+        epic_task = find_relevant_epic(user_text)
+        team_task = find_relevant_team(user_text)
+        selected_epic, selected_team = await asyncio.gather(epic_task, team_task)
+
+        # *** THE FALLBACK LOGIC ***
+        if not selected_epic:
+            # Cannot determine Epic, so we ask the user.
+            print("Orchestrator: Could not determine Epic. Asking for clarification.")
+            conversation_id = cache_conversation_context(user_text, selected_team)
+            # all_epics = fetch_all_active_epics() # Fetch all epics to show the user
+            all_epics = [{"key": "PROJ-101", "summary": "New User Onboarding Flow"}, {"key": "PROJ-102", "summary": "Payment System Overhaul"}]
+            
+            return {
+                "status": "NEEDS_CLARIFICATION",
+                "message": "I could not determine the correct Epic for this issue. Please choose one from the list.",
+                "clarification_needed": "epic",
+                "conversation_id": conversation_id,
+                "options": all_epics 
+            }
+
+    # --- If all context is available, proceed with LLM generation and Jira creation ---
+    augmented_prompt = create_augmented_prompt(user_text, selected_epic, selected_team)
+    # ... call main LLM ...
+    # ... create Jira ticket ...
+    jira_key = "PROJ-126"
+
+    return {
+        "status": "SUCCESS",
+        "message": "Jira ticket created successfully!",
+        "jira_key": jira_key,
+    }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
