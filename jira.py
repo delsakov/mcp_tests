@@ -356,3 +356,109 @@ def process_text_and_create_jira_advanced(text: str = Body(..., embed=True)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
+
+
+
+2. The New Augmented Prompt
+Since the selection is now done beforehand, the prompt becomes simpler. It provides the chosen context to the LLM and asks it to perform the final formatting.
+
+# In your jira_logic.py or a new prompt_templates.py
+
+def create_augmented_prompt(user_text: str, epic: dict | None, team: dict | None) -> str:
+    """
+    Creates a detailed prompt including the pre-selected context.
+    """
+    epic_context = f"Epic Key: {epic['key']}, Summary: {epic['summary']}" if epic else "No relevant epic found."
+    team_context = f"Team ID: {team['id']}, Name: {team['name']}, Focus: {team['description']}" if team else "No relevant team found."
+
+    prompt = f"""
+You are an expert-level Jira integration assistant. Your task is to analyze a user's request and the provided context to generate a precise JSON object for the Jira API.
+
+Your response MUST be a single JSON object.
+
+### Context ###
+
+**User Request:** "{user_text}"
+
+**Suggested Epic:** {epic_context}
+
+**Suggested Team:** {team_context}
+
+### Task ###
+
+Based on all the context above, generate the final JSON object. Adhere strictly to the template below. Use the provided Epic Key and Team ID in the final JSON. If a suggested epic or team was not found, the corresponding JSON field should be `null`.
+
+**JSON Template:**
+{{
+  "fields": {{
+    "project": {{ "key": "PROJ" }},
+    "summary": "string", // A concise summary of the user's request
+    "issuetype": {{ "name": "Story" }}, // Infer "Story", "Bug", or "Task" from the request
+    "parent": {{ // Epic Link field. Use the key from the suggested epic.
+        "key": "{epic['key'] if epic else None}"
+    }},
+    "customfield_10030": {{ // Team assignment field. Use the ID from the suggested team.
+        "id": "{team['id'] if team else None}"
+    }},
+    "description": {{
+      "type": "doc",
+      "version": 1,
+      "content": [ {{ "type": "paragraph", "content": [ {{ "type": "text", "text": "string" }} ] }} ]
+    }}
+  }}
+}}
+
+**JSON Output:**
+"""
+    return prompt
+
+
+
+
+Update the Orchestrator Endpoint
+The endpoint now needs to be async to use await. We use asyncio.gather to run the knowledge base queries concurrently, which significantly speeds up the process.
+
+# In your main.py
+import asyncio
+from fastapi import FastAPI, HTTPException, Body
+from knowledge_base_client import find_relevant_epic, find_relevant_team
+from jira_logic import create_augmented_prompt
+# ... other imports
+
+app = FastAPI()
+
+@app.post("/process-and-create-jira-advanced/")
+async def process_text_and_create_jira_advanced(text: str = Body(..., embed=True)):
+    """
+    A single endpoint to fetch context in parallel, process text, and create a Jira ticket.
+    """
+    try:
+        # Step 1: Concurrently retrieve context from the Knowledge Base
+        print("Orchestrator: Fetching Epic and Team in parallel...")
+        epic_task = find_relevant_epic(text)
+        team_task = find_relevant_team(text)
+        selected_epic, selected_team = await asyncio.gather(epic_task, team_task)
+
+        # Step 2: Create the augmented prompt with the retrieved context
+        augmented_prompt = create_augmented_prompt(text, selected_epic, selected_team)
+
+        # Step 3: Call the main LLM with the new, context-rich prompt
+        print("Orchestrator: Calling main LLM for final JSON generation...")
+        # extracted_json = await call_main_llm(augmented_prompt)
+        # Mocked response for demonstration:
+        extracted_json = {"fields": {"summary": "Example from LLM", "parent": {"key": (selected_epic or {}).get('key')}, "customfield_10030": {"id": (selected_team or {}).get('id')}}}
+
+        # Step 4: Validate and create the ticket in Jira
+        print("Orchestrator: Creating Jira ticket...")
+        # jira_key = await create_jira_ticket_in_system(extracted_json)
+        jira_key = "PROJ-125" # Mocked response
+
+        return {
+            "message": "Jira ticket created successfully with Epic and Team assignment!",
+            "jira_key": jira_key,
+            "data_used": extracted_json
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
