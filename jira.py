@@ -191,3 +191,168 @@ Now, using the template and rules above, generate the JSON object for the follow
 **User Request:** "{user's text goes here}"
 
 **JSON Output:**
+
+
+
+
+
+
+
+1. Database Interaction
+First, you need a function to fetch the Epics and Teams from your PostgreSQL database. We'll use a standard library like psycopg2-binary for this.
+
+# In a new file, e.g., database.py
+import psycopg2
+import os
+
+def get_db_connection():
+    # Best practice is to use environment variables for connection details
+    conn = psycopg2.connect(
+        host=os.environ.get("DB_HOST", "localhost"),
+        database=os.environ.get("DB_NAME", "jira_db"),
+        user=os.environ.get("DB_USER", "postgres"),
+        password=os.environ.get("DB_PASSWORD", "password")
+    )
+    return conn
+
+def fetch_active_epics():
+    """Fetches a list of active epics from the database."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    # Query to get epics that are not marked as 'Done' or similar
+    cur.execute("SELECT key, summary, description FROM epics WHERE status != 'Done'")
+    epics = cur.fetchall()
+    cur.close()
+    conn.close()
+    # Format for easy use in the prompt
+    return [{"key": row[0], "summary": row[1], "description": row[2]} for row in epics]
+
+def fetch_teams():
+    """Fetches a list of all teams from the database."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, description FROM teams")
+    teams = cur.fetchall()
+    cur.close()
+    conn.close()
+    # Format for easy use in the prompt
+    return [{"id": row[0], "name": row[1], "description": row[2]} for row in teams]
+
+2. The New Augmented Prompt
+This is where the magic happens. Your prompt will now include sections for the retrieved context, asking the LLM to perform a selection based on that context.
+
+# In your jira_logic.py or a new prompt_templates.py
+
+def create_augmented_prompt(user_text, epics, teams):
+    """
+    Creates a detailed prompt including context for the LLM to reason over.
+    """
+
+    # Format the context so it's clean and readable for the LLM
+    epics_context = "\n".join([f'- Key: {e["key"]}, Summary: {e["summary"]}, Description: {e["description"]}' for e in epics])
+    teams_context = "\n".join([f'- ID: {t["id"]}, Name: {t["name"]}, Focus: {t["description"]}' for t in teams])
+
+    prompt = f"""
+You are an expert-level Jira integration assistant. Your task is to analyze a user's request and generate a precise JSON object to be used with the Jira Create Issue API.
+
+Your response MUST be a single JSON object.
+
+### Step 1: Select the most relevant Epic
+
+Review the user's request and select the single best Epic from the list below by its key. The Epic's description should be the most closely related to the user's request. If no epic is a good fit, use "null".
+
+**Available Epics:**
+{epics_context}
+
+### Step 2: Select the most relevant Team
+
+Review the user's request and select the single best Team from the list below by its ID. The team's focus should align with the nature of the task (e.g., UI tasks go to Frontend, data tasks to Backend).
+
+**Available Teams:**
+{teams_context}
+
+### Step 3: Generate the final JSON
+
+Using your selections and the user request, generate the final JSON object. Adhere strictly to the template below.
+
+**JSON Template:**
+{{
+  "fields": {{
+    "project": {{ "key": "PROJ" }},
+    "summary": "string", // A concise summary of the user's request
+    "issuetype": {{ "name": "Story" }}, // Can be "Story", "Bug", or "Task"
+    "parent": {{ // This is the Epic Link field
+        "key": "string" // The key of the Epic you selected in Step 1. Use null if none.
+    }},
+    "customfield_10030": {{ // This is the Team assignment field
+        "id": "string" // The ID of the Team you selected in Step 2.
+    }},
+    "description": {{
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {{
+          "type": "paragraph",
+          "content": [ {{ "type": "text", "text": "string" }} ]
+        }}
+      ]
+    }}
+  }}
+}}
+
+---
+### ANALYSIS TASK ###
+
+**User Request:** "{user_text}"
+
+**JSON Output:**
+"""
+    return prompt
+
+3. Update the Orchestrator Endpoint
+Finally, update your main endpoint to perform the retrieval step before calling the LLM.
+
+# In your main.py
+
+from fastapi import FastAPI, HTTPException, Body
+from database import fetch_active_epics, fetch_teams # Import new DB functions
+from jira_logic import create_augmented_prompt # Import new prompt function
+# ... other imports
+
+app = FastAPI()
+
+@app.post("/process-and-create-jira-advanced/")
+def process_text_and_create_jira_advanced(text: str = Body(..., embed=True)):
+    """
+    A single endpoint to fetch context, process text, and create a Jira ticket.
+    """
+    try:
+        # Step 1: Retrieve context from the database
+        print("Orchestrator: Fetching Epics and Teams from DB...")
+        epics_list = fetch_active_epics()
+        teams_list = fetch_teams()
+
+        # Step 2: Create the augmented prompt
+        augmented_prompt = create_augmented_prompt(text, epics_list, teams_list)
+
+        # Step 3: Call the LLM with the new, context-rich prompt
+        print("Orchestrator: Calling LLM for analysis...")
+        # (This would be your existing function that calls the OpenAI API)
+        # For example:
+        # extracted_json = call_llm(augmented_prompt) 
+        extracted_json = {"fields": {"summary": "Example from LLM", "parent": {"key": "PROJ-101"}, "customfield_10030": {"id": "3"}}} # Mocked response
+
+        # Step 4: Validate and create the ticket in Jira
+        print("Orchestrator: Creating Jira ticket...")
+        # (Your existing logic to call the Jira API using the extracted_json)
+        # jira_key = create_jira_ticket_in_system(extracted_json)
+        jira_key = "PROJ-124" # Mocked response
+
+        return {
+            "message": "Jira ticket created successfully with Epic and Team assignment!",
+            "jira_key": jira_key,
+            "data_used": extracted_json
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
