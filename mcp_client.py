@@ -180,3 +180,66 @@ if __name__ == "__main__":
         print(json.dumps(manifest, indent=2))
     else:
         print("\n--- Failed to retrieve MCP Manifest ---")
+
+
+
+def execute_sandboxed_query(db_engine, sql_query: str, allowed_schema: str):
+    """
+    Executes a SQL query within a secure, sandboxed transaction.
+
+    Args:
+        db_engine: The SQLAlchemy engine instance.
+        sql_query: The raw SQL query string from the user.
+        allowed_schema: The schema associated with the user's API key.
+
+    Returns:
+        A tuple: (success: bool, result: list | str).
+        On success, result is a list of dictionaries (the query rows).
+        On failure, result is an error message string.
+    """
+    # 1. Security Check: Validate the schema against a whitelist.
+    if allowed_schema not in ALLOWED_SCHEMAS_FOR_EXECUTION:
+        return (False, f"Error: Schema '{allowed_schema}' is not authorized for execution.")
+
+    # 2. Construct the role name from the validated schema.
+    role_to_set = f"{allowed_schema}_executor_role"
+
+    # The 'with engine.connect() as conn' block handles connection pooling and closing.
+    with db_engine.connect() as conn:
+        # The 'with conn.begin() as trans' block handles the transaction.
+        # It automatically COMMITS on success or ROLLS BACK on any exception.
+        try:
+            with conn.begin() as trans:
+                # 3. Set the Role for this transaction. The f-string is safe here
+                #    because `role_to_set` was built from a whitelisted schema name.
+                conn.execute(text(f"SET ROLE '{role_to_set}'"))
+
+                # 4. Execute the User's Query.
+                #    PostgreSQL itself will now enforce the permissions of `tests_executor_role`.
+                result_proxy = conn.execute(text(sql_query))
+
+                # If the query was a SELECT, fetch the results.
+                if result_proxy.returns_rows:
+                    # .mappings() provides a dict-like interface for each row.
+                    # .all() fetches all rows into a list.
+                    results_list = result_proxy.mappings().all()
+                else:
+                    results_list = [] # For non-SELECT statements like INSERT/UPDATE
+
+                # 5. Reset the Role (optional but good practice)
+                #    The role is reset automatically at the end of the transaction,
+                #    but explicit reset is clearer.
+                conn.execute(text("RESET ROLE"))
+
+                # The transaction will be committed automatically upon exiting this block.
+                return (True, results_list)
+
+        except ProgrammingError as e:
+            # This block will catch permission errors from Postgres, syntax errors, etc.
+            # The transaction has already been rolled back by the 'with' statement.
+            # We return the original error from Postgres for debugging.
+            return (False, f"Execution failed: {e.orig}")
+
+        except Exception as e:
+            # Catch any other unexpected errors
+            return (False, f"An unexpected error occurred: {e}")
