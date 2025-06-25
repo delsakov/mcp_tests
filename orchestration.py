@@ -55,3 +55,26 @@ def get_my_jira_issues(
         issue_type=issue_type,
         status_exclude=status_exclude,
     )
+
+
+# orchestration.py (add these new definitions)
+
+class CreateJiraIssueInput(BaseModel):
+    project_key: str = Field(..., description="The key of the JIRA project, e.g., 'PROJ1'.")
+    summary: str = Field(..., description="The main title or summary of the JIRA issue.")
+    description: str = Field(..., description="The detailed body or description for the JIRA issue.")
+    issue_type: str = Field(..., description="The type of issue to create, e.g., 'Defect', 'Story', 'Task'. You should know the valid types from using the get_jira_project_schema tool.")
+
+@tool(args_schema=CreateJiraIssueInput)
+def create_jira_issue(project_key: str, summary: str, description: str, issue_type: str):
+    """
+    Creates a new JIRA issue. Use this when the user asks to create, add, log, or make a new ticket, defect, story, etc.
+    You must have all the required information (project_key, summary, description, issue_type) before calling this tool.
+    If you are missing any information, you MUST ask the user for it first.
+    """
+    return jira_services.create_issue(
+        project_key=project_key,
+        summary=summary,
+        description=description,
+        issue_type=issue_type
+    )
