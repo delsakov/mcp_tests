@@ -91,7 +91,11 @@ app = FastAPI(title="Schema-Aware JIRA Agent")
 # Instantiate your custom model and tools
 my_llm_instance = MyLLM()
 llm = InternalThreadedChatModel(llm_instance=my_llm_instance)
-tools = [orchestration.get_my_jira_issues, orchestration.get_jira_project_schema]
+tools = [
+    orchestration.get_my_jira_issues,
+    orchestration.get_jira_project_schema,
+    orchestration.create_jira_issue, # Add the new tool here
+]
 
 # The advanced system prompt that instructs the agent on the two-step process
 SYSTEM_PROMPT = """You are an expert JIRA assistant.
