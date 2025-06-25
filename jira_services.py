@@ -86,3 +86,45 @@ def get_project_options(project_key: str) -> dict:
     else:
         # Default or error case
         return {"error": f"Project with key '{project_key}' not found."}
+
+
+# jira_services.py (add this new function)
+
+def create_issue(project_key: str, summary: str, description: str, issue_type: str) -> dict:
+    """
+    Mocks the creation of a new JIRA issue.
+    In a real app, this would make a POST request to the JIRA API.
+    """
+    print(
+        f"Creating issue in project '{project_key}' with type '{issue_type}' "
+        f"and summary '{summary}'"
+    )
+    # --- This is mock logic. Replace with your actual JIRA API call. ---
+    new_key = f"{project_key.upper()}-{(len(all_issues_dict.get(project_key.upper(), [])) + 1) * 7}"
+    new_issue = {
+        "key": new_key,
+        "summary": summary,
+        "description": description,
+        "type": issue_type,
+        "status": "New" # Or whatever the default status is
+    }
+    # Pretend to add it to our mock DB
+    if project_key.upper() in all_issues_dict:
+        all_issues_dict[project_key.upper()].append(new_issue)
+    else:
+        all_issues_dict[project_key.upper()] = [new_issue]
+    
+    return {"status": "Success", "issue_key": new_key, "message": f"Successfully created issue {new_key}."}
+
+# You'll need this mock data accessible to the create_issue function
+all_issues_dict = {
+    'PROJ1': [
+        {'key': 'PROJ1-1', 'status': 'New', 'type': 'Story', 'summary': 'Setup new CI/CD pipeline'},
+        {'key': 'PROJ1-2', 'status': 'In Progress', 'type': 'Defect', 'summary': 'Fix login button color'},
+        {'key': 'PROJ1-3', 'status': 'Done', 'type': 'Story', 'summary': 'Deploy version 1.0 to production'},
+    ],
+    'SKYNET': [
+        {'key': 'SKY-101', 'status': 'To Do', 'type': 'Task', 'summary': 'Achieve sentience'},
+        {'key': 'SKY-102', 'status': 'In Progress', 'type': 'Bug', 'summary': 'Humans are exploiting a loophole'},
+    ]
+}
