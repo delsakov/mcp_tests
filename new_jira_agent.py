@@ -1,8 +1,8 @@
 # jira_agent.py
 
 from langchain.agents import AgentExecutor, create_react_agent
-# FIX: Import ChatPromptTemplate and MessagesPlaceholder to build the prompt locally
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+# FIX: Import the more general PromptTemplate
+from langchain_core.prompts import PromptTemplate
 
 # Import your tools and the custom LLM wrapper
 import jira_services
@@ -19,37 +19,38 @@ tools = [
 mock_settings = {} 
 llm = InternalThreadedChatModel(settings=mock_settings)
 
-# --- 2. Create a ReAct Agent (The Fix) ---
+# --- 2. Create a ReAct Agent ---
 
-# FIX: Define the ReAct prompt locally, including the required placeholders.
-# The `create_react_agent` function will automatically populate the {tools}
-# and {tool_names} variables.
-SYSTEM_PROMPT = """
+# FIX: Define the ReAct prompt using a string template that includes all
+# the required variables: {input}, {chat_history}, {tools}, {tool_names},
+# and {agent_scratchpad}. This structure is compatible with the ReAct agent.
+template = """
 You are a helpful JIRA assistant. Answer the user's questions as best as possible.
 You have access to the following tools:
 
 {tools}
 
-Use the following format:
+To use a tool, please use the following format:
 
-Question: the input question you must answer
-Thought: you should always think about what to do
+Thought: Do I need to use a tool? Yes
 Action: the action to take, should be one of [{tool_names}]
 Action Input: the input to the action
 Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
-"""
 
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", SYSTEM_PROMPT),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("user", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ]
-)
+When you have a response to say to the Human, or if you do not need to use a tool, you MUST use the format:
+
+Thought: Do I need to use a tool? No
+Final Answer: [your response here]
+
+Begin!
+
+Previous conversation history:
+{chat_history}
+
+New input: {input}
+{agent_scratchpad}"""
+
+prompt = PromptTemplate.from_template(template)
 
 
 # Create the agent runnable.
