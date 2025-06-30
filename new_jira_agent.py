@@ -21,12 +21,30 @@ llm = InternalThreadedChatModel(settings=mock_settings)
 
 # --- 2. Create a ReAct Agent (The Fix) ---
 
-# FIX: Define the ReAct prompt locally instead of using hub.pull()
-# This removes the external network dependency.
-# This structure is the standard for ReAct agents.
+# FIX: Define the ReAct prompt locally, including the required placeholders.
+# The `create_react_agent` function will automatically populate the {tools}
+# and {tool_names} variables.
+SYSTEM_PROMPT = """
+You are a helpful JIRA assistant. Answer the user's questions as best as possible.
+You have access to the following tools:
+
+{tools}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+"""
+
 prompt = ChatPromptTemplate.from_messages(
     [
-        ("system", "You are a helpful assistant. Use the tools provided to answer user questions."),
+        ("system", SYSTEM_PROMPT),
         MessagesPlaceholder(variable_name="chat_history"),
         ("user", "{input}"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
