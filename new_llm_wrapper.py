@@ -64,3 +64,9 @@ class InternalThreadedChatModel(BaseChatModel):
         # The only job is to stream the raw response from the LLM
         async for chunk in llm_instance.get_response(prompt, thread_id):
             yield AIMessageChunk(content=chunk)
+
+    # FIX: Add the required _llm_type property
+    @property
+    def _llm_type(self) -> str:
+        """Return the type of LLM."""
+        return "internal-gauss-llm"
