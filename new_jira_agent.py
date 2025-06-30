@@ -65,3 +65,30 @@ app_executor = AgentExecutor(
     verbose=True,
     handle_parsing_errors=True # This provides stability
 )
+
+
+
+
+prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", "You are a helpful assistant. You have access to the following tools:\n\n{tools}\n\nTo use a tool, respond with a JSON blob containing an 'action' and 'action_input' key."),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("user", "{input}"),
+        MessagesPlaceholder(variable_name="agent_scratchpad"),
+    ]
+)
+
+
+# Create the agent runnable. This function is designed to work with the
+# LLM wrapper and prompt template defined above.
+agent = create_react_agent(llm, tools, prompt)
+
+# Create the AgentExecutor. This is the runtime for the agent.
+# It will correctly parse the text output from your LLM.
+app_executor = AgentExecutor(
+    agent=agent,
+    tools=tools,
+    verbose=True,
+    handle_parsing_errors=True # This provides stability
+)
+
