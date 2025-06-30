@@ -21,9 +21,7 @@ llm = InternalThreadedChatModel(settings=mock_settings)
 
 # --- 2. Create a ReAct Agent ---
 
-# FIX: Define the ReAct prompt using a string template that includes all
-# the required variables: {input}, {chat_history}, {tools}, {tool_names},
-# and {agent_scratchpad}. This structure is compatible with the ReAct agent.
+# Define the ReAct prompt using a string template.
 template = """
 You are a helpful JIRA assistant. Answer the user's questions as best as possible.
 You have access to the following tools:
@@ -50,7 +48,12 @@ Previous conversation history:
 New input: {input}
 {agent_scratchpad}"""
 
-prompt = PromptTemplate.from_template(template)
+# FIX: Explicitly define all input variables for the prompt template.
+# This is the crucial step that ensures the agent is constructed correctly.
+prompt = PromptTemplate(
+    template=template,
+    input_variables=["input", "chat_history", "agent_scratchpad", "tools", "tool_names"],
+)
 
 
 # Create the agent runnable.
