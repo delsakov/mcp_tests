@@ -1,17 +1,13 @@
 # jira_agent.py
 
-from langchain.agents import AgentExecutor
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-# FIX: Import the specific formatters and parsers needed for a ReAct agent
-from langchain.agents.format_scratchpad.openai_tools import (
-    format_to_openai_tool_messages,
-)
-from langchain.agents.output_parsers.openai_tools import OpenAIToolsAgentOutputParser
-
+from langchain.agents import AgentExecutor, create_react_agent
+# We use the standard string-based PromptTemplate for ReAct agents
+from langchain_core.prompts import PromptTemplate
 
 # Import your tools and the custom LLM wrapper
 import jira_services
-from llm_wrapper import InternalThreadedChatModel
+# Make sure you are using the simpler GaussLLMWrapper that inherits from LLM
+from llm_wrapper import GaussLLMWrapper
 
 # --- 1. Instantiate Tools and LLM ---
 tools = [
@@ -22,50 +18,50 @@ tools = [
 
 # This is where you would pass your application settings
 mock_settings = {} 
-llm = InternalThreadedChatModel(settings=mock_settings)
+llm = GaussLLMWrapper(settings=mock_settings)
 
-# --- 2. Create a Robust Agent with Manual Construction ---
+# --- 2. Create the ReAct Agent with the Correct Prompt ---
 
-# FIX: We use a ChatPromptTemplate with MessagesPlaceholder. This is the most
-# flexible and modern way to handle chat history and agent thoughts.
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", "You are a helpful JIRA assistant."),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("user", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ]
-)
+# This is the standard, battle-tested prompt for ReAct agents.
+# It explicitly tells the LLM how to think, act, and format its response
+# so the agent executor can parse it.
+template = """
+Answer the following questions as best you can. You have access to the following tools:
 
-# FIX: We bind the tools to the LLM in a way that works for ANY chat model.
-# This adds the tool definitions to the prompt in a standardized way without
-# relying on the model having a native `.bind_tools()` method.
-llm_with_tools = llm.bind(tools=tools)
+{tools}
 
+Use the following format:
 
-# FIX: This is the core of the new agent. It's a chain of runnables (LCEL).
-# This explicitly defines how the agent thinks, acts, and parses output.
-agent = (
-    {
-        "input": lambda x: x["input"],
-        "chat_history": lambda x: x["chat_history"],
-        # This is the key: it correctly formats the agent's intermediate steps
-        # (the scratchpad) into a list of messages that the prompt expects.
-        "agent_scratchpad": lambda x: format_to_openai_tool_messages(
-            x["intermediate_steps"]
-        ),
-    }
-    | prompt
-    | llm_with_tools
-    | OpenAIToolsAgentOutputParser() # This parses the LLM's output to decide if it's a tool call or a final answer.
-)
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+
+Previous conversation history:
+{chat_history}
+
+New input: {input}
+{agent_scratchpad}"""
+
+# Create the prompt template, ensuring all required variables are present.
+prompt = PromptTemplate.from_template(template)
 
 
-# Create the AgentExecutor.
-# We add `handle_parsing_errors=True` for extra stability.
+# Create the agent runnable. This function is designed to work with the
+# LLM wrapper and prompt template defined above.
+agent = create_react_agent(llm, tools, prompt)
+
+# Create the AgentExecutor. This is the runtime for the agent.
+# It will correctly parse the text output from your LLM.
 app_executor = AgentExecutor(
     agent=agent,
     tools=tools,
     verbose=True,
-    handle_parsing_errors=True
+    handle_parsing_errors=True # This provides stability
 )
