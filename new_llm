@@ -1,0 +1,51 @@
+async def get_response(self, message: str) -> AsyncIterator[str]:
+        """
+        This is now a true async generator that streams the response.
+        """
+        # Prepare parameters and payload as before
+        # This logic would be based on your _get_chat_response function
+        deployment_id = "your_deployment_id" # You would get this dynamically
+        params = {"deployment_id": deployment_id}
+        payload = {"Message": message}
+
+        if self.conversation_id:
+            payload.update({"ConversationId": self.conversation_id})
+        if self.model_name:
+            params.update({"model_name": self.model_name})
+
+        print(f"--- GaussLLM Client: Opening stream for model: {self.model_name} ---")
+
+        # THE KEY CHANGE: Use `client.stream` instead of `client.post`
+        try:
+            async with self.client.stream(
+                "POST",
+                url="llm_chat + "/api/v2/invoke", # Example URL
+                params=params,
+                json=payload,
+                headers=self.llm_header,
+            ) as response:
+                # Raise an error for bad status codes (4xx or 5xx)
+                response.raise_for_status()
+                
+                # Iterate over the response content chunk by chunk
+                # Assuming the API sends Server-Sent Events (SSE) like "data: {...}"
+                async for line in response.aiter_lines():
+                    if line.startswith("data:"):
+                        # Strip the "data:" prefix and parse the JSON
+                        json_str = line[len("data:"):].strip()
+                        if json_str:
+                            try:
+                                data_chunk = json.loads(json_str)
+                                # Assuming the token is in a field called 'token' or 'Message'
+                                content_chunk = data_chunk.get("Message", "")
+                                if content_chunk:
+                                    yield content_chunk
+                            except json.JSONDecodeError:
+                                # Handle cases where a line is not valid JSON
+                                continue
+        except httpx.HTTPStatusError as e:
+            print(f"ERROR: HTTP error during streaming: {e.response.status_code} - {e.response.text}")
+            yield f"Error: Could not get response from LLM (HTTP {e.response.status_code})."
+        except Exception as e:
+            print(f"ERROR: An unexpected error occurred during streaming: {e}")
+            yield "Error: An unexpected error occurred."
