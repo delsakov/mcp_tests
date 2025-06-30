@@ -24,7 +24,7 @@ class LLM:
 
 class InternalThreadedChatModel(BaseChatModel):
     """
-    A stateless wrapper for the GaussLLM client.
+    A stateless wrapper for the LLM client.
     It receives all dynamic parameters (like model_name and thread_id)
     during the actual call, not during initialization.
     """
@@ -54,7 +54,7 @@ class InternalThreadedChatModel(BaseChatModel):
         prompt = self._convert_messages_to_prompt(messages)
 
         # Initialize your client here, inside the call, making the wrapper stateless
-        llm_instance = GaussLLM(
+        llm_instance = LLM(
             model_name=model_name,
             conversation_id=thread_id,
             # Pass other settings from self.settings
@@ -68,19 +68,19 @@ class InternalThreadedChatModel(BaseChatModel):
     @property
     def _llm_type(self) -> str:
         """Return the type of LLM."""
-        return "internal-gauss-llm"
+        return "internal-llm"
 
 
 class LLMWrapper(LLM):
     """
-    A custom wrapper for our GaussLLM that expects a single string prompt
+    A custom wrapper for our LLM that expects a single string prompt
     and returns a single string response.
     """
     settings: dict 
 
     @property
     def _llm_type(self) -> str:
-        return "gauss-llm-string-wrapper"
+        return "llm-string-wrapper"
 
     def _call(self, prompt: str, stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> str:
         """Run the LLM on the given prompt."""
@@ -94,7 +94,7 @@ class LLMWrapper(LLM):
         thread_id = configurable.get("thread_id")
         model_name = configurable.get("model_name")
 
-        llm_instance = GaussLLM(
+        llm_instance = LLM(
             model_name=model_name,
             conversation_id=thread_id,
             settings=self.settings
