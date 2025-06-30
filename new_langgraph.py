@@ -1,61 +1,66 @@
 from langgraph.graph import END, StateGraph
 from langchain_core.tools import tool
-from typing import List
+from typing import Dict, Any, Optional
 
-# Assuming your custom LLM class
 class MyLLM:
     def __init__(self, **params):
-        # Initialization code
         pass
 
     async def get_response(self, message, thread_id):
-        # Custom async call to your model
-        return f"Model response to '{message}' in thread '{thread_id}'"
+        # Example simplified parsing logic using model inference
+        if "get issues" in message.lower():
+            return {"tool": "get_jira_issues", "params": {"project_key": "ABC", "status": "Open"}}
+        elif "details" in message.lower():
+            issue_key = message.split()[-1]
+            return {"tool": "get_jira_issue_details", "params": {"issue_key": issue_key}}
+        return {"tool": "unknown", "params": {}}
 
-# Example tool definition with @tool decorator from LangChain
 @tool
-def search_wikipedia(query: str) -> str:
-    """Search Wikipedia and return a summary."""
-    return f"Wikipedia result for '{query}'"
+def get_jira_issues(project_key: str, status: str) -> str:
+    return f"Issues from project {project_key} with status {status}"
 
-# Define state for LangGraph
+@tool
+def get_jira_issue_details(issue_key: str) -> str:
+    return f"Details for issue key: {issue_key}"
+
 class GraphState:
     message: str
     thread_id: str
-    result: str = ""
+    llm_decision: Optional[Dict[str, Any]] = None
+    result: Optional[str] = None
 
-# Node: call your custom LLM
-async def call_llm(state: GraphState) -> GraphState:
+async def call_llm_and_decide(state: GraphState) -> GraphState:
     llm = MyLLM()
-    response = await llm.get_response(state.message, state.thread_id)
-    state.result = response
+    decision = await llm.get_response(state.message, state.thread_id)
+    state.llm_decision = decision
     return state
 
-# Node: call your LangChain tool
-async def call_tool(state: GraphState) -> GraphState:
-    tool_result = search_wikipedia(state.message)
-    state.result = tool_result
+async def execute_tool(state: GraphState) -> GraphState:
+    decision = state.llm_decision
+    if decision["tool"] == "get_jira_issues":
+        state.result = get_jira_issues(**decision["params"])
+    elif decision["tool"] == "get_jira_issue_details":
+        state.result = get_jira_issue_details(**decision["params"])
+    else:
+        state.result = "Unable to determine appropriate action."
     return state
 
-# Condition node to decide next step
-def decide_node(state: GraphState):
-    if state.message.lower().startswith("search"):
-        return "call_tool"
-    return "call_llm"
-
-# Create LangGraph
+# Workflow definition
 workflow = StateGraph(GraphState)
-workflow.add_node("call_llm", call_llm)
-workflow.add_node("call_tool", call_tool)
-workflow.set_conditional_entry_point(decide_node)
-workflow.add_edge("call_llm", END)
-workflow.add_edge("call_tool", END)
+workflow.add_node("call_llm_and_decide", call_llm_and_decide)
+workflow.add_node("execute_tool", execute_tool)
+workflow.set_entry_point("call_llm_and_decide")
+workflow.add_edge("call_llm_and_decide", "execute_tool")
+workflow.add_edge("execute_tool", END)
 
-# Compile the graph into an executable app
 app = workflow.compile()
 
 # Example usage
 async def run_example():
-    initial_state = GraphState(message="Search Python programming", thread_id="12345")
-    final_state = await app.ainvoke(initial_state)
+    state = GraphState(message="Get issues from ABC project", thread_id="12345")
+    final_state = await app.ainvoke(state)
+    print(final_state.result)
+
+    state = GraphState(message="Details ISSUE-123", thread_id="12345")
+    final_state = await app.ainvoke(state)
     print(final_state.result)
