@@ -9,8 +9,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, AIMessageChunk
 from langchain_core.outputs import ChatResult
 
-# --- MOCK of your GaussLLM client ---
-class GaussLLM:
+class LLM:
     def __init__(self, model_name: str, conversation_id: str, **kwargs):
         self.model_name = model_name
         self.conversation_id = conversation_id
@@ -70,3 +69,36 @@ class InternalThreadedChatModel(BaseChatModel):
     def _llm_type(self) -> str:
         """Return the type of LLM."""
         return "internal-gauss-llm"
+
+
+class LLMWrapper(LLM):
+    """
+    A custom wrapper for our GaussLLM that expects a single string prompt
+    and returns a single string response.
+    """
+    settings: dict 
+
+    @property
+    def _llm_type(self) -> str:
+        return "gauss-llm-string-wrapper"
+
+    def _call(self, prompt: str, stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> str:
+        """Run the LLM on the given prompt."""
+        # This is a synchronous wrapper around the async call for compatibility.
+        return asyncio.run(self._acall(prompt, stop, run_manager, **kwargs))
+
+    async def _acall(self, prompt: str, stop: Optional[List[str]] = None, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any) -> str:
+        """Async run of the LLM on the given prompt."""
+        # The agent passes all dynamic config here in `kwargs`
+        configurable = kwargs.get("configurable", {})
+        thread_id = configurable.get("thread_id")
+        model_name = configurable.get("model_name")
+
+        llm_instance = GaussLLM(
+            model_name=model_name,
+            conversation_id=thread_id,
+            settings=self.settings
+        )
+
+        response = await llm_instance.get_chat_response(prompt)
+        return response
