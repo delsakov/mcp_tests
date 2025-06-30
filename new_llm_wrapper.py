@@ -13,7 +13,7 @@ class LLM:
     def __init__(self, model_name: str, conversation_id: str, **kwargs):
         self.model_name = model_name
         self.conversation_id = conversation_id
-        print(f"--- GaussLLM Client Initialized for model: {self.model_name}, thread: {self.conversation_id[:8]} ---")
+        print(f"--- LLM Client Initialized for model: {self.model_name}, thread: {self.conversation_id[:8]} ---")
 
     async def get_response(self, prompt: str, conversation_id: str) -> AsyncIterator[str]:
         response_words = [f"Response ", f"from ", f"model ", f"'{self.model_name}'... "]
