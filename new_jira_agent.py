@@ -4,7 +4,8 @@ import operator
 from typing import TypedDict, Annotated
 
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolExecutor
+# FIX: Import ToolNode instead of the old ToolExecutor
+from langgraph.prebuilt import ToolNode
 from langchain_core.messages import BaseMessage, ToolMessage, HumanMessage
 
 # Import your tools and the custom LLM wrapper
@@ -22,7 +23,6 @@ tools = [
     jira_services.get_my_jira_issues,
     jira_services.create_jira_issue,
 ]
-tool_executor = ToolExecutor(tools)
 
 # This is where you would pass your application settings
 mock_settings = {} 
@@ -51,25 +51,18 @@ def call_model(state: AgentState):
     # We return a dictionary with the key `messages` to update the state
     return {"messages": [response]}
 
-def call_tool(state: AgentState):
-    """Node: executes the tool calls made by the LLM."""
-    last_message = state["messages"][-1]
-    
-    # The ToolExecutor takes a tool call and returns the tool's output
-    action = last_message.tool_calls[0]
-    response = tool_executor.invoke(action)
-    
-    # We wrap the tool's output in a ToolMessage to send back to the LLM
-    tool_message = ToolMessage(content=str(response), tool_call_id=action['id'])
-    
-    return {"messages": [tool_message]}
+# FIX: Create a ToolNode. This is a pre-built node that executes tools.
+# It's the modern replacement for manually calling ToolExecutor.
+tool_node = ToolNode(tools)
+
 
 # --- 4. Assemble and compile the graph ---
 workflow = StateGraph(AgentState)
 
 # Add the nodes
 workflow.add_node("agent", call_model)
-workflow.add_node("action", call_tool)
+# FIX: Add the pre-built tool_node instead of the old call_tool function
+workflow.add_node("action", tool_node)
 
 # Define the entry point and the edges
 workflow.set_entry_point("agent")
