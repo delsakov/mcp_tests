@@ -108,3 +108,54 @@ class LenientStructuredChatOutputParser(StructuredChatOutputParser):
         except Exception as e:
             # Maintain compatibility with how the agent handles parsing errors
             raise OutputParserException(f"Could not parse LLM output: {text}") from e
+
+
+async def stream_agent_response(user_id: str,
+                                prompt_text: str,
+                                model_name: str,
+                                thread_id: str) -> AsyncGenerator[str, None]:
+    """
+    Handles JIRA-related requests by creating a configured agent
+    for each request and streaming the response.
+    """
+    print(f"[stream_agent_response] Using model: {model_name}, thread_id: {thread_id}")
+
+    # 1. Instantiate your optimized LLM wrapper with the correct settings for this request.
+    llm = InternalThreadedChatModel(
+        model_name=model_name,      # Pass model_name directly
+        conversation_id=thread_id   # Pass thread_id directly
+    )
+
+    # 2. Initialize the agent executor with the correctly configured LLM instance.
+    agent_executor = initialize_agent(
+        tools,
+        llm,  # Use the new instance
+        agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
+        verbose=True,
+        handle_parsing_errors=True,
+        agent_kwargs={
+            "system_message": SYSTEM_PROMPT,
+            "output_parser": LenientStructuredChatOutputParser(),
+        }
+    )
+
+    # 3. Create the history-aware agent.
+    agent_with_chat_history = RunnableWithMessageHistory(
+        agent_executor,
+        get_session_history,
+        history_message_key="chat_history",
+        input_messages_key="input",
+    )
+
+    # 4. The config for the call now only needs the session_id for the history wrapper.
+    config = {"configurable": {"session_id": thread_id}}
+
+    async for chunk in agent_with_chat_history.astream(
+        {"input": prompt_text},
+        config=config
+    ):
+        # Your existing logic for processing chunks remains the same
+        if "output" in chunk:
+            # ... yield content ...
+
+            
