@@ -73,3 +73,38 @@ async def jira_stream(
         yield final_answer
 
     return StreamingResponse(event_stream(), media_type="text/plain; charset=utf-8")
+
+
+
+from langchain.agents.structured_chat.output_parser import StructuredChatOutputParser
+from langchain.schema import AgentAction, AgentFinish, OutputParserException
+
+class LenientStructuredChatOutputParser(StructuredChatOutputParser):
+    """
+    An output parser for structured chat agents that is lenient
+    about 'null' action_input. It converts 'null' to an empty dict.
+    """
+    def parse(self, text: str) -> AgentAction | AgentFinish:
+        # The agent's default prompt format includes ```json ... ```
+        try:
+            # Extract the JSON block from the model's text output
+            response_json_str = text.strip().split("```json")[1].split("```")[0].strip()
+            response_obj = json.loads(response_json_str)
+
+            # --- THE FIX ---
+            # If action_input exists and is null, replace it with an empty dictionary
+            if "action_input" in response_obj and response_obj.get("action_input") is None:
+                response_obj["action_input"] = {}
+            # --- END OF FIX ---
+
+            action = response_obj.get("action")
+            action_input = response_obj.get("action_input")
+
+            if action == "Final Answer":
+                return AgentFinish({"output": action_input}, text)
+            else:
+                return AgentAction(action, action_input, text)
+
+        except Exception as e:
+            # Maintain compatibility with how the agent handles parsing errors
+            raise OutputParserException(f"Could not parse LLM output: {text}") from e
