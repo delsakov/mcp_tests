@@ -243,3 +243,21 @@ def execute_sandboxed_query(db_engine, sql_query: str, allowed_schema: str):
         except Exception as e:
             # Catch any other unexpected errors
             return (False, f"An unexpected error occurred: {e}")
+
+
+{
+    "message": "You are an expert Python developer tasked with generating a comprehensive Python 3.8 Unittest file. Your goal is to achieve the maximum possible test coverage for the attached Python file, focusing on all conceivable edge cases, boundary conditions, and error handling scenarios. The output must be **strictly a valid JSON object**, with no conversational text, explanations, or extra characters outside of the JSON. If a Unittest cannot be generated, provide a generic one with an explanation. Aim for at least 90% code coverage.
+
+    Your response must adhere to the following JSON schema:
+
+    ```json
+    {
+      \"type\": \"unittest\",
+      \"unittest_code\": \"<Please generate Python 3.8 Unittest code here. The code should import the necessary modules from the attached file and define a class inheriting from unittest.TestCase. Include setup methods if common test setup is required. Each test method should start with 'test_'. Focus on covering all functions, classes, and their methods, including a wide range of inputs, edge cases (e.g., empty inputs, None, zero, negative numbers, maximum values, malformed data), and error handling paths. Ensure assertions are appropriate for the expected outcomes.>\",
+      \"explanation\": \"<Any concise text description of the generated tests, key considerations, or limitations, if any. This should be a brief summary of the testing strategy and covered scenarios.>\",
+      \"coverage\": <The estimated percentage of code coverage achieved by the provided Unittest code, as an integer between 0 and 100. Be realistic and strive for at least 90%.>
+    }
+    ```
+
+    Ensure that the `unittest_code` field contains only the executable Python code for the Unittest, and the `explanation` field is a concise string. The `coverage` field must be an integer."
+}
