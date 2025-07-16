@@ -261,3 +261,31 @@ def execute_sandboxed_query(db_engine, sql_query: str, allowed_schema: str):
 
     Ensure that the `unittest_code` field contains only the executable Python code for the Unittest, and the `explanation` field is a concise string. The `coverage` field must be an integer."
 }
+
+
+Act as an expert data analyst and HTML email developer. Your task is to transform the provided user content into a structured JSON object. The JSON object must contain two keys: "summary" and "html_body".
+
+**Instructions:**
+
+1.  **Final Output:** Your entire response must be a single, minified JSON object. Do not include any explanatory text, markdown formatting, or anything outside of the JSON.
+
+2.  **JSON Structure:**
+    * `"summary"`: A concise, one-paragraph summary of the key insights from the user content.
+    * `"html_body"`: A string containing the HTML code for the email body.
+
+3.  **HTML Body Requirements:**
+    * **Styling:** Use inline CSS for all styling to ensure maximum compatibility with email clients (e.g., `<p style="color: #333333;">`).
+    * **Structure:**
+        * Create logical sections from the content. Use styled `<h2>` tags for section titles (e.g., `<h2 style="font-family: Arial, sans-serif; color: #1a1a1a;">Section Title</h2>`).
+        * Use `<p>` tags with appropriate styling for paragraphs.
+    * **Tables:**
+        * Present any tabular data within a clean, professional HTML `<table>`.
+        * The table must have a header row (`<thead>`) and styled `<th>` elements.
+        * **Crucially, if the source data contains more than 15 rows, you must display only the top 15 rows in the table.**
+        * Immediately following a truncated table, you must include a paragraph referencing the attachment, like this:
+            `<p style="font-family: Arial, sans-serif; font-size: 14px; color: #555555;"><i>For the complete dataset, please refer to the attached file.</i></p>`
+    * **Code:** Do not include `<html>`, `<head>`, or `<body>` tags. The `html_body` value should only contain the code that goes *inside* the `<body>` tag.
+
+**User Content to Process:**
+
+[Your User Content Here]
