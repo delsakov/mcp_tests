@@ -1,0 +1,49 @@
+import requests
+import json
+
+# --- Configuration ---
+BASE_URL = "http://localhost:8000"  # Change to your server's address
+MCP_ENDPOINT = f"{BASE_URL}/mcp"
+
+# Use a Session object to maintain the connection and handle cookies
+session = requests.Session()
+
+try:
+    # 1. Establish the connection and get metadata
+    # This initial GET request often returns available operations.
+    print(f"--> Connecting to {MCP_ENDPOINT}...")
+    initial_response = session.get(MCP_ENDPOINT)
+    initial_response.raise_for_status()  # Raises an error for bad status codes (4xx or 5xx)
+    
+    print("\n✅ Connection successful. Server metadata:")
+    # The response is typically a stream of JSON objects
+    for line in initial_response.iter_lines():
+        if line:
+            data = json.loads(line.decode('utf-8'))
+            print(json.dumps(data, indent=2))
+
+
+    # 2. Request the list of tools
+    # This is usually a POST request with a specific JSON payload.
+    # The exact format may vary, but it often follows this pattern.
+    print(f"\n--> Requesting list of tools from {MCP_ENDPOINT}...")
+    tool_request_payload = {
+        "mcp_operation": "get_all_tools"  # Common operation name for listing tools in FastMCP
+    }
+    
+    tool_response = session.post(MCP_ENDPOINT, json=tool_request_payload)
+    tool_response.raise_for_status()
+
+    print("\n✅ Successfully retrieved tools:")
+    # Assuming the response is a JSON object with a 'tools' key
+    tools_data = tool_response.json()
+    print(json.dumps(tools_data, indent=2))
+
+
+except requests.exceptions.RequestException as e:
+    print(f"\n❌ An error occurred: {e}")
+
+finally:
+    # Close the session
+    session.close()
+    print("\nSession closed.")
