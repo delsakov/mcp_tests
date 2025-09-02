@@ -269,16 +269,25 @@ async def llm_structured(prompt: str, pydantic_model: BaseModel, config: dict) -
 
 async def route_node(state: GState, config: dict) -> GState:
     """The first node in the graph. Determines which path to take."""
-    # ENHANCEMENT: More detailed prompt for the router.
+    # ENHANCEMENT: The router is now aware of the confirmation step.
+    if state.get("confirmation_pending"):
+        if "yes" in state["user_input"].lower() or "proceed" in state["user_input"].lower() or "ok" in state["user_input"].lower():
+             state["route"] = "confirm_create"
+             return state
+        else:
+             state["route"] = "cancel"
+             return state
+
     prompt = f"""You are an expert JIRA routing assistant. Based on the user's request, choose exactly one route from the available options.
 
 User Request: "{state['user_input']}"
 
 Available Routes:
-- find_issues: Use for any request that involves searching, finding, listing, or asking for tickets/issues. Examples: "show me my open bugs", "what were the last stories closed in PROJ1?".
-- project_details: Use when the user asks for information *about* a project itself, like its components, versions, or available issue types. Example: "what components are in the PROJ1 project?".
-- sprint_details: Use for any questions about sprints, like "what's in the current sprint?" or "show me completed sprints".
-- create_issue: Use only when the user explicitly asks to create, log, or make a new ticket, story, or bug. Example: "create a new defect for me".
+- find_issues: For searching, finding, or listing tickets/issues.
+- project_details: For questions about a project's metadata (components, versions).
+- sprint_details: For questions about sprints.
+- create_issue: For requests to create a new ticket, story, or bug.
+- cancel: If the user wants to stop or cancel the current operation.
 """
     decision = await llm_structured(prompt, JIRARoutePick, config)
     state["route"] = decision.route
