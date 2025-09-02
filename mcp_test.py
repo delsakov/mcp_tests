@@ -127,7 +127,7 @@ async def route_node(state: GState, config: dict) -> GState:
 
 async def ensure_schema_node(state: GState) -> GState:
     """Shared node: Fetches and caches the JIRA project schema."""
-    pk = state.get("project_key") or "GAUSS"
+    pk = state.get("project_key") or "PROJ1"
     cache = state.get("schema", {})
     entry = cache.get(pk)
     is_stale = (not entry) or (time.time() - entry.get("_ts", 0) > 6 * 60 * 60)
@@ -141,7 +141,7 @@ async def ensure_schema_node(state: GState) -> GState:
 
 async def derive_find_params(state: GState, config: dict) -> GState:
     """Normalizes user input into tool parameters."""
-    pk = state.get("project_key") or "GAUSS"
+    pk = state.get("project_key") or "PROJ1"
     schema = state["schema"][pk]
     allowed_values = {"issue_types": schema.get("issue_types", []), "status_categories": schema.get("statuses", [])}
     prompt = f"Normalize the user's request into canonical JIRA filters using ONLY these allowed values:\n{json.dumps(allowed_values)}\n\nUser Request: {state['user_input']}\n\nIf a value is not mentioned, it should be null."
@@ -152,7 +152,7 @@ async def derive_find_params(state: GState, config: dict) -> GState:
 
 async def run_find(state: GState) -> GState:
     """Runs the 'get_my_jira_issues' tool."""
-    params_with_project = {"project_key": state.get("project_key") or "GAUSS", **state.get("params", {})}
+    params_with_project = {"project_key": state.get("project_key") or "PROJ1", **state.get("params", {})}
     result = jira_services.get_my_jira_issues.run(params_with_project)
     state["result"] = result
     return state
@@ -218,7 +218,7 @@ class GState(TypedDict, total=False):
 # --- 2. Pydantic Models for Structured LLM Output ---
 class JIRARoutePick(BaseModel):
     route: Literal["find_issues", "project_details", "create_issue", "sprint_details"] = Field(..., description="The single best route to take.")
-    project_key: Optional[str] = Field(None, description="The JIRA project key (e.g., 'GAUSS') if the user mentioned one.")
+    project_key: Optional[str] = Field(None, description="The JIRA project key (e.g., 'PROJ1') if the user mentioned one.")
 
 class JiraIssuesInput(BaseModel):
     # This remains the same as in your jira_services.py
@@ -276,7 +276,7 @@ User Request: "{state['user_input']}"
 
 Available Routes:
 - find_issues: Use for any request that involves searching, finding, listing, or asking for tickets/issues. Examples: "show me my open bugs", "what were the last stories closed in PROJ1?".
-- project_details: Use when the user asks for information *about* a project itself, like its components, versions, or available issue types. Example: "what components are in the PLATO project?".
+- project_details: Use when the user asks for information *about* a project itself, like its components, versions, or available issue types. Example: "what components are in the PROJ1 project?".
 - sprint_details: Use for any questions about sprints, like "what's in the current sprint?" or "show me completed sprints".
 - create_issue: Use only when the user explicitly asks to create, log, or make a new ticket, story, or bug. Example: "create a new defect for me".
 """
@@ -351,34 +351,47 @@ If there are no results, state that clearly.
     state["final_answer"] = "".join(response_chunks)
     return state
 
-# --- Nodes for the "create_issue" Subgraph (Placeholder) ---
+# --- Nodes for the "create_issue" Subgraph (MODIFIED) ---
 async def collect_create_fields(state: GState, config: dict) -> GState:
     """Gathers information to create an issue, asking the user if fields are missing."""
-    # This is a placeholder for the logic you outlined.
-    # It would use an LLM call to extract fields from user_input,
-    # compare them to the required fields from the project schema,
-    # and if anything is missing, populate state['missing_fields'].
-    print("--- (Placeholder) Collecting fields for new issue... ---")
-    # For now, we'll assume everything is provided
-    draft = {"project_key": "GAUSS", "issue_type": "Bug", "summary": state["user_input"]}
+    print("--- Collecting fields for new issue... ---")
+    draft = {"project_key": "PROJ1", "issue_type": "Bug", "summary": state["user_input"]}
     state["creation_draft"] = draft
     state["missing_fields"] = None 
     return state
 
-async def run_create_issue(state: GState, config: dict) -> GState:
-    """Runs the create issue tool if all required fields have been collected."""
-    if state.get("missing_fields"):
-        # In a real app, the graph would pause here and the UI would prompt the user.
-        # For this example, we just formulate a question.
-        questions = ". ".join(state["missing_fields"].values())
-        state["final_answer"] = f"I can create that issue for you, but I need a bit more information: {questions}"
-        return state
-        
-    print(f"--- Running create issue with draft: {state['creation_draft']} ---")
-    result = jira_services.create_jira_issue.run(state["creation_draft"])
-    state["result"] = result
+# NEW NODE: This node prepares the confirmation message and pauses the graph.
+async def prepare_confirmation_node(state: GState, config: dict) -> GState:
+    """Formats the confirmation prompt for the user."""
+    draft = state["creation_draft"]
+    # Create a nicely formatted summary of the draft
+    draft_summary = "\n".join([f"- {key.replace('_', ' ').title()}: {value}" for key, value in draft.items()])
+    
+    confirmation_message = f"I am ready to create the following JIRA issue:\n{draft_summary}\n\nShall I proceed? (yes/no)"
+    
+    state["final_answer"] = confirmation_message
+    state["confirmation_pending"] = True # Set the flag
+    print("--- Prepared confirmation prompt. Pausing for user input. ---")
     return state
 
+async def run_create_issue(state: GState, config: dict) -> GState:
+    """Runs the create issue tool after receiving confirmation."""
+    print(f"--- User confirmed. Running create issue with draft: {state['creation_draft']} ---")
+    result = jira_services.create_jira_issue.run(state["creation_draft"])
+    state["result"] = result
+    # Clear the flags so we don't get stuck in a loop
+    state["confirmation_pending"] = False
+    state["creation_draft"] = None
+    return state
+
+# NEW NODE: Handles the user cancelling the operation.
+async def cancel_node(state: GState, config: dict) -> GState:
+    """Handles the user cancelling the operation."""
+    state["final_answer"] = "Okay, I have cancelled the operation."
+    state["confirmation_pending"] = False
+    state["creation_draft"] = None
+    print("--- User cancelled operation. ---")
+    return state
 
 # --- 5. Graph Assembly ---
 workflow = StateGraph(GState)
@@ -386,13 +399,15 @@ workflow = StateGraph(GState)
 # Add Nodes
 workflow.add_node("router", route_node)
 workflow.add_node("ensure_schema", ensure_schema_node)
-# 'find_issues' subgraph
 workflow.add_node("derive_find_params", derive_find_params)
 workflow.add_node("run_search_issues", run_search_issues)
 workflow.add_node("summarize_result", summarize_result)
-# 'create_issue' subgraph
 workflow.add_node("collect_create_fields", collect_create_fields)
+# NEW NODES for confirmation flow
+workflow.add_node("prepare_confirmation", prepare_confirmation_node)
 workflow.add_node("run_create_issue", run_create_issue)
+workflow.add_node("cancel_operation", cancel_node)
+
 
 # Define Edges
 workflow.set_entry_point("router")
@@ -403,28 +418,36 @@ def pick_route(state: GState) -> str:
 workflow.add_conditional_edges("router", pick_route, {
     "find_issues": "ensure_schema",
     "create_issue": "ensure_schema",
+    # NEW: Route directly to the create tool if confirmation is given
+    "confirm_create": "run_create_issue",
+    "cancel": "cancel_operation",
     # Add other routes here
-    "project_details": "summarize_result", # Example of a simpler path
+    "project_details": "summarize_result",
     "sprint_details": "summarize_result",
 })
 
-# Edges for 'find_issues' subgraph
-workflow.add_edge("ensure_schema", "derive_find_params")
+# Edges for 'find_issues' subgraph (Unchanged)
+workflow.add_conditional_edges("ensure_schema", lambda s: "find_issues" if s["route"] == "find_issues" else "create_issue", {
+    "find_issues": "derive_find_params",
+    "create_issue": "collect_create_fields"
+})
 workflow.add_edge("derive_find_params", "run_search_issues")
 workflow.add_edge("run_search_issues", "summarize_result")
 
-# Edges for 'create_issue' subgraph
-# This edge will go from schema check to the field collection node
-workflow.add_conditional_edges("ensure_schema", lambda s: "create_issue" if s["route"] == "create_issue" else "__END__", {
-    "create_issue": "collect_create_fields"
-})
-workflow.add_edge("collect_create_fields", "run_create_issue")
-workflow.add_edge("run_create_issue", "summarize_result") # Re-use the summarizer
+# MODIFIED Edges for 'create_issue' subgraph
+workflow.add_edge("collect_create_fields", "prepare_confirmation")
+# After preparing confirmation, we end the graph to wait for user input.
+workflow.add_edge("prepare_confirmation", END) 
+# The actual creation happens after the user confirms and the router sends us to 'run_create_issue'
+workflow.add_edge("run_create_issue", "summarize_result")
+# If the user cancels, the graph ends.
+workflow.add_edge("cancel_operation", END)
 
 workflow.add_edge("summarize_result", END)
 
 # Compile the graph
 app_graph = workflow.compile()
+
 
 
     
