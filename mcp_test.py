@@ -184,5 +184,249 @@ app_graph = workflow.compile()
 
 
 finally:
+    pass
+
+# jira_agent.py
+
+import asyncio
+import json
+import time
+from typing import TypedDict, Dict, Any, Optional, List, Literal
+
+from pydantic import BaseModel, Field
+
+# Your existing modules
+import jira_services
+from internal.api_models import InternalThreadedChatModel # Your simplified LLM Wrapper
+from internal.llm_suite import settings # Your actual settings
+
+# --- 1. State Definition ---
+# ENHANCEMENT: Added `user_info` to pass user context through the graph.
+class GState(TypedDict, total=False):
+    user_input: str
+    user_info: Dict[str, Any] # e.g., {"user_id": "dmitry.elsakov", "display_name": "Dmitry Elsakov"}
+    route: str
+    project_key: Optional[str]
+    schema: Dict[str, Any]
+    params: Dict[str, Any]
+    result: Any
+    final_answer: Optional[str]
+    # For multi-turn interactions, especially in the 'create_issue' flow
+    missing_fields: Optional[Dict[str, str]]
+    creation_draft: Optional[Dict[str, Any]]
+
+# --- 2. Pydantic Models for Structured LLM Output ---
+class JIRARoutePick(BaseModel):
+    route: Literal["find_issues", "project_details", "create_issue", "sprint_details"] = Field(..., description="The single best route to take.")
+    project_key: Optional[str] = Field(None, description="The JIRA project key (e.g., 'GAUSS') if the user mentioned one.")
+
+class JiraIssuesInput(BaseModel):
+    # This remains the same as in your jira_services.py
+    project_key: Optional[List[str]] = Field(None, description="A list of JIRA project keys to search within.")
+    issue_type: Optional[str] = None
+    status: Optional[List[str]] = None
+    status_category: Optional[List[str]] = None
+    assignee: Optional[str] = Field(None, description="The user's ID, or the special value 'currentUser()' for the current user.")
+    last_updated_days: Optional[int] = None
+
+class SprintDetails(BaseModel):
+    sprint_id: Optional[int] = None
+    sprint_name: Optional[str] = None
+    sprint_state: Optional[Literal["active", "future", "closed"]] = None
+    
+class CreateIssueDraft(BaseModel):
+    project_key: str
+    issue_type: str
+    summary: Optional[str]
+    description: Optional[str]
+    # Add other fields as needed
+
+# --- 3. LLM and Tools Initialization ---
+llm = InternalThreadedChatModel(settings=settings)
+# (Your tool definitions are in jira_services.py and are correct)
+
+# --- 4. Graph Nodes ---
+
+async def llm_structured(prompt: str, pydantic_model: BaseModel, config: dict) -> BaseModel:
+    """Helper function to get structured output from the LLM."""
+    full_prompt = f"{prompt}\n\nReturn ONLY a valid JSON object matching the following Pydantic schema:\n{pydantic_model.schema_json(indent=2)}"
+    messages = [HumanMessage(content=full_prompt)]
+    response_chunks = [chunk.content async for chunk in llm._astream(messages, configurable=config)]
+    response_str = "".join(response_chunks).strip()
+    
+    # Simple regex to find JSON blob
+    json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
+    if not json_match:
+        # Fallback logic can be added here
+        raise ValueError(f"Could not find a JSON object in the LLM response: {response_str}")
+        
+    try:
+        response_json = json.loads(json_match.group(0))
+        return pydantic_model.model_validate(response_json)
+    except (json.JSONDecodeError, ValidationError) as e:
+        # Fallback or error handling
+        raise ValueError(f"Failed to decode or validate LLM response JSON: {e}")
+
+async def route_node(state: GState, config: dict) -> GState:
+    """The first node in the graph. Determines which path to take."""
+    # ENHANCEMENT: More detailed prompt for the router.
+    prompt = f"""You are an expert JIRA routing assistant. Based on the user's request, choose exactly one route from the available options.
+
+User Request: "{state['user_input']}"
+
+Available Routes:
+- find_issues: Use for any request that involves searching, finding, listing, or asking for tickets/issues. Examples: "show me my open bugs", "what were the last stories closed in PROJ1?".
+- project_details: Use when the user asks for information *about* a project itself, like its components, versions, or available issue types. Example: "what components are in the PLATO project?".
+- sprint_details: Use for any questions about sprints, like "what's in the current sprint?" or "show me completed sprints".
+- create_issue: Use only when the user explicitly asks to create, log, or make a new ticket, story, or bug. Example: "create a new defect for me".
+"""
+    decision = await llm_structured(prompt, JIRARoutePick, config)
+    state["route"] = decision.route
+    state["project_key"] = decision.project_key
+    print(f"--- Router decided route: '{decision.route}' for project: '{decision.project_key}' ---")
+    return state
+
+async def ensure_schema_node(state: GState, config: dict) -> GState:
+    """Shared node: Fetches and caches the JIRA project schema if needed."""
+    project_key = state.get("project_key") or "PROJ1" # Default project
+    schema_cache = state.get("schema", {})
+    
+    if project_key not in schema_cache: # Simple check, can be enhanced with TTL
+        print(f"--- Schema for '{project_key}' not in cache. Fetching... ---")
+        # Assuming get_jira_project_schema can take a single key
+        schema_data = jira_services.get_jira_project_schema.run({"project_key": project_key})
+        schema_cache[project_key] = schema_data
+        state["schema"] = schema_cache
+    return state
+
+# --- Nodes for the "find_issues" Subgraph ---
+async def derive_find_params(state: GState, config: dict) -> GState:
+    """Uses the LLM to translate natural language into structured search parameters."""
+    project_key = state.get("project_key") or "PROJ1"
+    schema = state["schema"][project_key]
+    user_info = state["user_info"]
+
+    # ENHANCEMENT: A much more powerful prompt for parameter extraction.
+    prompt = f"""You are a JIRA query assistant. Your job is to convert a user's natural language request into a structured JSON object for searching JIRA.
+
+Use the following schema information for project '{project_key}':
+- Available Issue Types: {[it['name'] for it in schema.get('issue_types', [])]}
+- Available Statuses: {[s['name'] for s in schema.get('statuses', [])]}
+- Available Status Categories: {[sc['name'] for sc in schema.get('status_categories', [])]}
+
+Current user information:
+- User ID: {user_info['user_id']}
+- Display Name: {user_info['display_name']}
+
+Analyze the user's request below and fill in the parameters.
+- If the user says "me", "my", or "I", set 'assignee' to "currentUser()".
+- Translate terms like "open", "in progress", "active" to the appropriate 'status_category' values.
+- Translate timeframes like "last week" or "this month" into 'last_updated_days'.
+
+User Request: "{state['user_input']}"
+"""
+    params = await llm_structured(prompt, JiraIssuesInput, config)
+    state["params"] = params.model_dump(exclude_none=True)
+    print(f"--- Derived find params: {state['params']} ---")
+    return state
+
+async def run_search_issues(state: GState, config: dict) -> GState:
+    """Executes the JIRA search tool with the derived parameters."""
+    print(f"--- Running search with params: {state['params']} ---")
+    result = jira_services.get_my_jira_issues.run(state["params"])
+    state["result"] = result
+    return state
+
+async def summarize_result(state: GState, config: dict) -> GState:
+    """Summarizes the raw tool output into a friendly response for the user."""
+    prompt = f"""You are a helpful assistant. The user asked: "{state['user_input']}"
+We ran a search and got the following JSON result:
+{json.dumps(state['result'], indent=2)}
+
+Based on this data, summarize the answer in a clear, user-friendly, and concise way.
+If there are no results, state that clearly.
+"""
+    messages = [HumanMessage(content=prompt)]
+    response_chunks = [chunk.content async for chunk in llm._astream(messages, configurable=config)]
+    state["final_answer"] = "".join(response_chunks)
+    return state
+
+# --- Nodes for the "create_issue" Subgraph (Placeholder) ---
+async def collect_create_fields(state: GState, config: dict) -> GState:
+    """Gathers information to create an issue, asking the user if fields are missing."""
+    # This is a placeholder for the logic you outlined.
+    # It would use an LLM call to extract fields from user_input,
+    # compare them to the required fields from the project schema,
+    # and if anything is missing, populate state['missing_fields'].
+    print("--- (Placeholder) Collecting fields for new issue... ---")
+    # For now, we'll assume everything is provided
+    draft = {"project_key": "GAUSS", "issue_type": "Bug", "summary": state["user_input"]}
+    state["creation_draft"] = draft
+    state["missing_fields"] = None 
+    return state
+
+async def run_create_issue(state: GState, config: dict) -> GState:
+    """Runs the create issue tool if all required fields have been collected."""
+    if state.get("missing_fields"):
+        # In a real app, the graph would pause here and the UI would prompt the user.
+        # For this example, we just formulate a question.
+        questions = ". ".join(state["missing_fields"].values())
+        state["final_answer"] = f"I can create that issue for you, but I need a bit more information: {questions}"
+        return state
+        
+    print(f"--- Running create issue with draft: {state['creation_draft']} ---")
+    result = jira_services.create_jira_issue.run(state["creation_draft"])
+    state["result"] = result
+    return state
+
+
+# --- 5. Graph Assembly ---
+workflow = StateGraph(GState)
+
+# Add Nodes
+workflow.add_node("router", route_node)
+workflow.add_node("ensure_schema", ensure_schema_node)
+# 'find_issues' subgraph
+workflow.add_node("derive_find_params", derive_find_params)
+workflow.add_node("run_search_issues", run_search_issues)
+workflow.add_node("summarize_result", summarize_result)
+# 'create_issue' subgraph
+workflow.add_node("collect_create_fields", collect_create_fields)
+workflow.add_node("run_create_issue", run_create_issue)
+
+# Define Edges
+workflow.set_entry_point("router")
+
+def pick_route(state: GState) -> str:
+    return state["route"]
+
+workflow.add_conditional_edges("router", pick_route, {
+    "find_issues": "ensure_schema",
+    "create_issue": "ensure_schema",
+    # Add other routes here
+    "project_details": "summarize_result", # Example of a simpler path
+    "sprint_details": "summarize_result",
+})
+
+# Edges for 'find_issues' subgraph
+workflow.add_edge("ensure_schema", "derive_find_params")
+workflow.add_edge("derive_find_params", "run_search_issues")
+workflow.add_edge("run_search_issues", "summarize_result")
+
+# Edges for 'create_issue' subgraph
+# This edge will go from schema check to the field collection node
+workflow.add_conditional_edges("ensure_schema", lambda s: "create_issue" if s["route"] == "create_issue" else "__END__", {
+    "create_issue": "collect_create_fields"
+})
+workflow.add_edge("collect_create_fields", "run_create_issue")
+workflow.add_edge("run_create_issue", "summarize_result") # Re-use the summarizer
+
+workflow.add_edge("summarize_result", END)
+
+# Compile the graph
+app_graph = workflow.compile()
+
+
+    
     session.close()
     print("\nSession closed.")
