@@ -121,3 +121,42 @@ def fetch_latest_email():
 
     return {"subject": subject, "body": body}
 You can then take the subject and body from the returned dictionary and send it to your new FastAPI endpoint.Next Steps and ConsiderationsError Handling: What if the LLM can't extract the required information? You should add logic to handle cases where the returned JSON is malformed or missing key fields.User Confirmation: For a more robust system, instead of creating the ticket directly, you could have the LLM respond to the user (e.g., by replying to the email) with the extracted information and ask for confirmation before creating the ticket.Advanced Logic: You can enhance the prompt to extract more complex information, like assigning the ticket to a specific person based on keywords in the email or setting a due date.Security: Be mindful of security when parsing emails. Sanitize the input to prevent any injection attacks.By following these steps, you can create a powerful and intuitive system for creating Jira tickets from natural language, leveraging the APIs you've already built and the power of LLMs.
+
+Current Role: Software Engineer (L4), Technical Specialist Track
+Target Role: Vice President (L5), Technical Specialist Track
+Date: September 7, 2025
+
+Executive Summary:
+As an L4 Technical Specialist, I have consistently demonstrated performance and ownership at the L5 level by architecting and delivering high-impact, innovative solutions with firm-wide reach. I have proactively identified strategic opportunities to leverage emerging technologies like LLMs, driven the adoption of modern infrastructure to deliver significant cost savings, and established myself as a subject matter expert and trusted partner for both my team and the broader organization. My contributions extend beyond technical delivery to actively strengthening the firm's culture through interviewing and community engagement, proving my readiness for the increased scope and responsibility of the VP role.
+
+Key Accomplishments & Impact
+1. Strategic Impact & Technical Innovation (Demonstrating L5 Scope)
+Architected and Delivered a Firm-Wide LLM Search Platform (GaussLLM): Led the end-to-end creation of an intelligent Confluence search engine using RAG and LLMs. This involved designing the complete architecture, including backend services, APIs, database, and a user-facing UI.
+
+Broad Impact: The core data loading and RAG generation scripts have been adopted by multiple teams across different Lines of Business (LOBs), including the Corporate & Investment Bank (CIB), demonstrating significant cross-functional influence and platform potential.
+
+Spearheaded Adoption of Postgres & Delivered Financial Savings: Initiated and led the team's adoption of Postgres. I navigated the beta-testing program, established a streamlined onboarding process for our team, and shared this knowledge to enable wider adoption.
+
+Business Acumen & Impact: This initiative resulted in the team receiving fully-funded database usage through Q1 2026, delivering direct and significant financial savings.
+
+Expanded LLM Platform Capabilities to Drive Business Value: Proactively extended the GaussLLM platform beyond search to include automated unit test generation and a JIRA smart assistant.
+
+Strategic Ownership: By engaging the JIRA CTO team for collaboration, I am ensuring the solution is built for scalability and reusability across the firm, showcasing strategic thinking beyond my immediate team's needs.
+
+2. Engineering Excellence & Influence (Recognition as SME)
+Innovated Core Developer Tooling & Reduced Project Risk: Created a novel Calculation Dependency Graph for the Gauss codebase to instantly identify the impact of code changes. This tool is now being integrated into the unit test generation process to provide better context for the LLM, directly improving code quality and reducing regression risk.
+
+Established as a Subject Matter Expert (SME) in Security & Integration: Served as the go-to expert for internal OAuth2 integration, successfully unblocking and guiding multiple critical projects (e.g., Gauss-Prefect) through complex security implementations.
+
+Drove Engineering Best Practices with Reusable Tooling: Developed and shared essential BitBucket management scripts for repository cleanup, auditing large files, and managing branches. These tools are now continuously used by other teams, improving our collective engineering hygiene and governance.
+
+3. Cultural & Firm-Wide Contributions (Commitment to the Firm)
+Committed to Talent Attraction and Hiring: Actively volunteer as a core interviewer for the LOB (CT) in both CodePair and DesignPair sessions for multiple "Superdays."
+
+Impact: Recognized by HR and recruiters as a reliable "go-to" substitute interviewer, demonstrating a strong commitment to building our talent pipeline and supporting the New Joiner Experience, a key behavioral expectation.
+
+Fostering a Culture of Innovation and Knowledge Sharing:
+
+Introduced and am actively sharing a "Bisection" debugging process for critical test failures, which is now being explored for adoption by the QR team for data and calculation analysis.
+
+Currently developing workflows to leverage LLM capabilities to automate routine team tasks (e.g., JIRA creation from logs), proactively seeking efficiency gains for the entire team.
