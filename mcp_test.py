@@ -462,3 +462,198 @@ app_graph = workflow.compile()
     
     session.close()
     print("\nSession closed.")
+
+# --- 2. Pydantic Models for Structured LLM Output ---
+class JIRARoutePick(BaseModel):
+    route: Literal["find_issues", "project_details", "create_issue", "sprint_details", "confirm_create", "cancel"] = Field(..., description="The single best route to take.")
+    project_key: Optional[str] = Field(None, description="The JIRA project key (e.g., 'GAUSS') if the user mentioned one.")
+
+# NEW/UPDATED Pydantic models for the create flow
+class CreateIssueDraft(BaseModel):
+    """Represents the data extracted to create a JIRA issue."""
+    project_key: str
+    issue_type: str = Field(..., description="The type of the issue, e.g., 'Bug', 'Story'.")
+    summary: Optional[str] = Field(None, description="The summary or title of the issue.")
+    description: Optional[str] = Field(None, description="The detailed description of the issue.")
+    # This will hold any other custom fields extracted by the LLM
+    other_fields: Dict[str, Any] = Field(default_factory=dict)
+
+class CreateStepResult(BaseModel):
+    """The structured output from the LLM after analyzing the user's creation request."""
+    draft: CreateIssueDraft
+    ask_user: Optional[Dict[str, str]] = Field(None, description="A dictionary where keys are the names of REQUIRED fields that are still missing, and values are user-friendly questions to ask for that information.")
+
+async def route_node(state: GState, config: dict) -> GState:
+    # ... (Your existing route_node is fine)
+    if state.get("confirmation_pending"):
+        if any(word in state["user_input"].lower() for word in ["yes", "proceed", "ok", "confirm", "do it"]):
+             state["route"] = "confirm_create"
+        else:
+             state["route"] = "cancel"
+        return state
+    # ... your routing logic
+    return state # fallback
+
+async def ensure_schema_node(state: GState, config: dict) -> GState:
+    # ... (Your existing ensure_schema_node is fine)
+    return state
+
+# --- REDESIGNED Node for the "create_issue" Subgraph ---
+async def collect_create_fields(state: GState, config: dict) -> GState:
+    """
+    Analyzes user input against the JIRA project schema to create a draft
+    and identify any missing required information.
+    """
+    print("--- Collecting fields for new issue... ---")
+    project_key = state.get("project_key") or "GAUSS" # Default project
+
+    # 1. Fetch the dynamic field schema for the project
+    project_fields_schema = await asyncio.to_thread(
+        jira_services.get_fields_list_by_project, project=project_key
+    )
+
+    # 2. Prepare a clean summary of the schema for the LLM prompt
+    field_summary_for_prompt = {}
+    for issue_type, fields in project_fields_schema.items():
+        field_summary_for_prompt[issue_type] = {
+            field_name: {
+                "required": details.get("required", False),
+                "type": details.get("type", "string"),
+                "allowed_values": details.get("allowedValues"),
+            }
+            for field_name, details in fields.items()
+        }
+
+    # 3. Construct the detailed prompt for the LLM
+    prompt = f"""You are an intelligent JIRA assistant responsible for creating new issues.
+Your task is to analyze the user's request to fill out the necessary fields for creating a JIRA ticket.
+
+**User's Request:**
+"{state['user_input']}"
+
+**Available Fields Schema for Project '{project_key}':**
+```json
+{json.dumps(field_summary_for_prompt, indent=2)}
+```
+
+**Instructions:**
+1.  Read the user's request carefully.
+2.  Determine the most appropriate `issue_type`. If not specified, default to 'Bug'.
+3.  Fill in the `summary`, `description`, and any `other_fields` based on the user's request.
+4.  After filling the draft, check if any fields marked as `"required": true` are still empty.
+5.  If any required fields are missing, formulate a user-friendly question for each one and add it to the `ask_user` dictionary.
+6.  Return a JSON object with the final `draft` and the `ask_user` questions.
+"""
+    
+    # 4. Call the LLM to get the structured draft and follow-up questions
+    step_result = await llm_structured(prompt, CreateStepResult, config)
+
+    # 5. Update the graph's state
+    # We combine 'other_fields' with the main draft fields
+    draft_dict = step_result.draft.model_dump(exclude_none=True)
+    other_fields = draft_dict.pop("other_fields", {})
+    draft_dict.update(other_fields)
+    
+    state["creation_payload"] = draft_dict
+    state["missing_fields"] = step_result.ask_user
+    
+    print(f"--- Collected Draft: {state['creation_payload']} ---")
+    if state["missing_fields"]:
+        print(f"--- Missing Fields: {state['missing_fields']} ---")
+        
+    return state
+
+
+async def ask_user_for_info_node(state: GState, config: dict) -> GState:
+    """
+    If fields are missing, this node formats them into a single message to the user
+    and pauses the graph.
+    """
+    questions = state["missing_fields"]
+    formatted_questions = "\n".join(f"- {q}" for q in questions.values())
+    
+    state["final_answer"] = f"I need a bit more information to create the issue:\n{formatted_questions}"
+    # We set a flag or route to indicate we are waiting for the user's answers
+    state["route"] = "awaiting_user_details" # The router will need to handle this
+    print("--- Asking user for more information. Pausing graph. ---")
+    return state
+
+
+# ... (The rest of your nodes: prepare_confirmation_node, run_create_issue, etc. are fine) ...
+async def prepare_confirmation_node(state: GState, config: dict) -> GState:
+    # ...
+    return state
+async def run_create_issue(state: GState, config: dict) -> GState:
+    # ...
+    return state
+async def cancel_node(state: GState, config: dict) -> GState:
+    # ...
+    return state
+async def summarize_result(state: GState, config: dict) -> GState:
+    # ...
+    return state
+
+
+# --- 5. Graph Assembly ---
+workflow = StateGraph(GState)
+
+# Add Nodes
+workflow.add_node("router", route_node)
+workflow.add_node("ensure_schema", ensure_schema_node)
+# workflow.add_node("derive_find_params", derive_find_params)
+# workflow.add_node("run_search_issues", run_search_issues)
+workflow.add_node("summarize_result", summarize_result)
+# Updated create flow nodes
+workflow.add_node("collect_create_fields", collect_create_fields)
+workflow.add_node("ask_user_for_info", ask_user_for_info_node)
+workflow.add_node("prepare_confirmation", prepare_confirmation_node)
+workflow.add_node("run_create_issue", run_create_issue)
+workflow.add_node("cancel_operation", cancel_node)
+
+
+# Define Edges
+workflow.set_entry_point("router")
+
+def pick_route(state: GState) -> str:
+    # Your router logic is here
+    return state.get("route", END)
+
+# ... (Main routing is unchanged, but ensure 'awaiting_user_details' is handled) ...
+workflow.add_conditional_edges("router", pick_route, {
+    "find_issues": "ensure_schema",
+    "create_issue": "collect_create_fields",
+    "confirm_create": "run_create_issue",
+    "cancel": "cancel_operation",
+    # When resuming after providing details, we re-collect/update the fields
+    "awaiting_user_details": "collect_create_fields", 
+})
+
+# NEW: Conditional edge after collecting fields
+def after_collecting_fields(state: GState) -> str:
+    """Decides whether to ask the user for more info or proceed to confirmation."""
+    if state.get("missing_fields"):
+        return "ask_user_for_info"
+    else:
+        return "prepare_confirmation"
+
+workflow.add_conditional_edges("collect_create_fields", after_collecting_fields, {
+    "ask_user_for_info": "ask_user_for_info",
+    "prepare_confirmation": "prepare_confirmation",
+})
+
+# ... (Other edges are mostly the same) ...
+workflow.add_edge("ask_user_for_info", END) # Pause to get user input
+workflow.add_edge("prepare_confirmation", END) 
+workflow.add_edge("run_create_issue", "summarize_result")
+workflow.add_edge("cancel_operation", END)
+workflow.add_edge("summarize_result", END)
+
+# You will need to re-add your find_issues flow edges
+# workflow.add_edge("ensure_schema", "derive_find_params")
+# workflow.add_edge("derive_find_params", "run_search_issues")
+# workflow.add_edge("run_search_issues", "summarize_result")
+
+
+# Compile the graph
+checkpointer = MemorySaver()
+app_graph = workflow.compile(checkpointer=checkpointer)
