@@ -657,3 +657,48 @@ workflow.add_edge("summarize_result", END)
 # Compile the graph
 checkpointer = MemorySaver()
 app_graph = workflow.compile(checkpointer=checkpointer)
+
+
+ # --- Step 1: Preliminary LLM call to extract search terms ---
+    search_term_prompt = f"""You are an information extraction assistant.
+Analyze the user's request and extract any text they used to describe the following JIRA fields.
+Do not invent information. If they did not mention a field, leave it null.
+
+User Request: "{state['user_input']}"
+"""
+    search_terms = await llm_structured(search_term_prompt, ExtractedSearchTerms, config)
+    print(f"--- Extracted search terms: {search_terms.model_dump(exclude_none=True)} ---")
+
+    # --- Step 2: Run fuzzy searches based on extracted terms ---
+    field_suggestions = {}
+    if search_terms.components:
+        top_components = await asyncio.to_thread(fuzzy_search_components, search_terms.components, project_key, limit=5)
+        if top_components: field_suggestions['components'] = top_components
+    
+    if search_terms.fixVersions:
+        top_versions = await asyncio.to_thread(fuzzy_search_versions, search_terms.fixVersions, project_key, limit=5)
+        if top_versions: field_suggestions['fixVersions'] = top_versions
+
+    if search_terms.sprint:
+        top_sprints = await asyncio.to_thread(fuzzy_search_sprint, search_terms.sprint, project_key, limit=5)
+        if top_sprints: field_suggestions['sprint'] = top_sprints
+
+    print(f"--- Fuzzy search top suggestions: {field_suggestions} ---")
+
+    # --- Step 3: Final LLM call with refined context ---
+    project_fields_schema = await asyncio.to_thread(jira_services.get_fields_list_by_project, project=project_key)
+    # ... (Prepare your field_summary_for_prompt as before) ...
+    field_summary_for_prompt = {} # Your logic to build this summary
+    
+    final_prompt = f"""You are an intelligent JIRA assistant responsible for creating new issues.
+Your task is to analyze the user's request and fill out a structured JSON draft.
+
+**User's Request:**
+"{state['user_input']}"
+
+**Available Fields Schema for Project '{project_key}':**
+(Your full schema summary here)
+
+**IMPORTANT: Here are some suggested values based on a preliminary search. If any of these are a good match for the user's request, you MUST use them.**
+```json
+{json.dumps(field_suggestions, indent=2)}
