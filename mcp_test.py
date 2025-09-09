@@ -702,3 +702,11 @@ Your task is to analyze the user's request and fill out a structured JSON draft.
 **IMPORTANT: Here are some suggested values based on a preliminary search. If any of these are a good match for the user's request, you MUST use them.**
 ```json
 {json.dumps(field_suggestions, indent=2)}
+
+
+# NEW Pydantic models for the enhanced create flow
+class ExtractedSearchTerms(BaseModel):
+    """Pydantic model for the terms to be used in fuzzy searches."""
+    components: Optional[str] = Field(None, description="The user's description of the component(s).")
+    fixVersions: Optional[str] = Field(None, description="The user's description of the fix version(s).")
+    sprint: Optional[str] = Field(None, description="The user's description of the sprint.")
