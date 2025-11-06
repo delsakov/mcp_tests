@@ -12,6 +12,42 @@ Integrating LLMs with Your JIRA APIsThe process can be broken down into three ma
 | (Create, etc.) |      |  Endpoint       |
 +----------------+      +-----------------+
 Step-by-Step ImplementationHere’s a more detailed breakdown of the steps involved, with code examples.1. Exposing Your APIs with fastapi-mcpFirst, ensure your existing FastAPI application has the fastapi-mcp library correctly configured. If you have an endpoint to create a Jira ticket, it might look something like this:from fastapi import FastAPI
+
+def replace_inline_links(self, message: str) -> str:
+    """Replaces inline links in the message with confluence pages links"""
+    confluence_url = settings.confluence_url
+
+    def replacer(match):
+        # This is correct: Group 2 is Page ID, Group 3 is filename
+        page_id = match.group(2)
+        file_content = match.group(3)
+
+        # This is also correct:
+        clean_name = re.sub(pattern: r'\.(?:pdf|html|docx|xlsx|pptx|txt)$', repl: '', string=file_content)
+        
+        if "ATTACHMENT" in clean_name:
+            clean_name = clean_name.replace("__old:] ATTACHMENT ", "__new: ")
+        clean_name = clean_name.strip()
+        return f"_[ref.:[{clean_name}]({confluence_url}{page_id})]_"
+
+    try:
+        # THE UPDATED PATTERN:
+        pattern = r"(\[\s*)?\[([\d]+)\]\s+(.+?\.(?:pdf|html|docx|xlsx|pptx|txt))((?:(,\s*)?((?:\s*\[.*?\])|(?:\s*\(#.*?\)))*\.?))"
+        
+        new_message = re.sub(pattern, replacer, message)
+        
+        # Your existing cleanup code
+        new_message = new_message.replace("__old: ", "__new: ").replace("__old: ", "__new: ")
+        duplicate_link_pattern = r'(_\[ref\.: \[([^\]]+)\]\(([^)]+)\))(\s*_\1)+'
+        while re.search(duplicate_link_pattern, new_message):
+            new_message = re.sub(duplicate_link_pattern, repl: r'\1', new_message)
+        return new_message
+    
+    except Exception as e:
+        log.error(f"Error replacing inline links: {str(e)}")
+        return message
+
+
 from pydantic import BaseModel
 from fastapi_mcp import FastApiMCP
 
