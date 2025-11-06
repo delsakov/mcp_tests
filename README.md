@@ -1,4 +1,4 @@
-pattern = r"\[([\d]+)\]\s+(.+?\.(?:pdf|html|docx|xlsx|pptx|txt))((?:\s*\[.*?\])*)"
+pattern = r"\[([\d]+)\]\s+(.+?\.(?:pdf|html|docx|xlsx|pptx|txt))(?:,\s*\[p\.[\d.-]+\]\.?|(?:\s*\[.*?\])*)"
 
 Integrating LLMs with Your JIRA APIsThe process can be broken down into three main components:Natural Language Understanding (NLU): A component that can read unstructured text (like an email or a chat message) and extract the necessary information to create a Jira ticket. This is where the LLM comes in.Orchestration Logic: A process that takes the user's message, sends it to the LLM for processing, and then uses the extracted information to call your existing Jira API.Tool-Enabled APIs: Your existing FastAPI endpoints, made available to the LLM via fastapi-mcp.Visualizing the WorkflowHere’s a high-level look at how the system will work:+----------------+      +-----------------+      +--------------------+      +----------------+
 |  User Message  |  ->  |  Orchestrator   |  ->  |        LLM         |  ->  |  Orchestrator  |
