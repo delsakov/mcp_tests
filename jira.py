@@ -654,5 +654,90 @@ WHERE
     -- CRITICAL: To mimic the API, we usually filter out hidden fields
     COALESCE(fli.ISHIDDEN, 'false') = 'false'
 
+
+    WITH CUSTOM_FIELD_MAP AS (
+    -- mimicing the missing reference table
+    SELECT 
+        ID AS cf_id, 
+        -- Pre-build the key so the main query doesn't have to parse anything
+        'customfield_' || CAST(ID AS VARCHAR(255)) AS generated_key, 
+        cfname
+    FROM JIRADCCT.customfield
+),
+FIELD_CONFIG_MAPPING AS (
+    -- Your existing logic for Field Configs
+    SELECT 
+        pr.ID AS project_id,
+        it.ID AS issue_type_id,
+        COALESCE(flse_specific.FIELDLAYOUT, flse_default.FIELDLAYOUT) AS field_layout_id
+    FROM 
+        JIRADCCT.project pr
+        CROSS JOIN JIRADCCT.issuetype it
+        JOIN JIRADCCT.nodeassociation na 
+            ON pr.ID = na.source_node_id 
+            AND na.sink_node_entity = 'FieldLayoutScheme'
+            AND na.association_type = 'ProjectScheme'
+        LEFT JOIN JIRADCCT.fieldlayoutschemeentity flse_specific 
+            ON na.sink_node_id = flse_specific.SCHEME 
+            AND flse_specific.ISSUETYPE = it.ID
+        LEFT JOIN JIRADCCT.fieldlayoutschemeentity flse_default 
+            ON na.sink_node_id = flse_default.SCHEME 
+            AND flse_default.ISSUETYPE IS NULL
+)
+SELECT 
+    pr.pkey AS project_key,
+    it.pname AS issue_type_name,
+    fs.name AS screen_name,
+    fsli.FIELDIDENTIFIER AS field_id,
+    
+    -- FIELD NAME LOGIC
+    CASE 
+        -- Safe Join: matches exact string, no parsing
+        WHEN cf_map.cfname IS NOT NULL THEN cf_map.cfname
+        -- System Fields Mappings
+        WHEN fsli.FIELDIDENTIFIER = 'summary' THEN 'Summary'
+        WHEN fsli.FIELDIDENTIFIER = 'description' THEN 'Description'
+        WHEN fsli.FIELDIDENTIFIER = 'priority' THEN 'Priority'
+        WHEN fsli.FIELDIDENTIFIER = 'assignee' THEN 'Assignee'
+        WHEN fsli.FIELDIDENTIFIER = 'reporter' THEN 'Reporter'
+        WHEN fsli.FIELDIDENTIFIER = 'duedate' THEN 'Due Date'
+        WHEN fsli.FIELDIDENTIFIER = 'issuelinks' THEN 'Linked Issues'
+        WHEN fsli.FIELDIDENTIFIER = 'components' THEN 'Component/s'
+        WHEN fsli.FIELDIDENTIFIER = 'fixVersions' THEN 'Fix Version/s'
+        ELSE INITCAP(fsli.FIELDIDENTIFIER) 
+    END AS field_name,
+
+    -- CONFIGURATION (Required/Hidden)
+    COALESCE(fli.ISREQUIRED, 'false') AS is_required,
+    COALESCE(fli.ISHIDDEN, 'false') AS is_hidden
+
+FROM 
+    JIRADCCT.nodeassociation na
+    JOIN JIRADCCT.project pr ON pr.id = na.source_node_id AND na.association_type = 'ProjectScheme' AND na.sink_node_entity = 'IssueTypeScreenScheme'
+    JOIN JIRADCCT.issuetypescreenscheme its ON na.sink_node_id = its.ID
+    JOIN JIRADCCT.issuetypescreenschemeentity itse ON its.ID = itse.SCHEME
+    JOIN JIRADCCT.issuetype it ON itse.ISSUETYPE = it.ID
+    JOIN JIRADCCT.fieldscreenscheme fss ON itse.FIELDSCREENSCHEME = fss.ID
+    JOIN JIRADCCT.fieldscreenschemeitem fssi ON fssi.FIELDSCREENSCHEME = fss.ID
+    JOIN JIRADCCT.fieldscreen fs ON fssi.FIELDSCREEN = fs.ID
+    JOIN JIRADCCT.fieldscreentab fst ON fst.FIELDSCREEN = fs.ID
+    JOIN JIRADCCT.fieldscreenlayoutitem fsli ON fsli.FIELDSCREENTAB = fst.ID
+    
+    -- JOIN TO OUR CUSTOM MAP
+    -- This is safe. If fsli.FIELDIDENTIFIER is 'trash', it just won't match. No error.
+    LEFT JOIN CUSTOM_FIELD_MAP cf_map
+        ON fsli.FIELDIDENTIFIER = cf_map.generated_key
+
+    -- JOIN CONFIG
+    LEFT JOIN FIELD_CONFIG_MAPPING fcm
+        ON pr.ID = fcm.project_id 
+        AND it.ID = fcm.issue_type_id
+    LEFT JOIN JIRADCCT.fieldlayoutitem fli
+        ON fcm.field_layout_id = fli.FIELDLAYOUT
+        AND fli.FIELDIDENTIFIER = fsli.FIELDIDENTIFIER
+
+WHERE
+    COALESCE(fli.ISHIDDEN, 'false') = 'false'
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
