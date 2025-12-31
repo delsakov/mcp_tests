@@ -739,5 +739,65 @@ FROM
 WHERE
     COALESCE(fli.ISHIDDEN, 'false') = 'false'
 
+
+SELECT 
+    pr.pkey AS project_key,
+    it.pname AS issue_type_name,
+    fs.name AS screen_name,
+    fsli.FIELDIDENTIFIER AS field_id,
+    
+    -- [Existing Field Name Logic]
+    CASE 
+        WHEN cf_map.cfname IS NOT NULL THEN cf_map.cfname
+        ELSE INITCAP(fsli.FIELDIDENTIFIER) 
+    END AS field_name,
+
+    -- [Existing Required/Hidden Logic]
+    COALESCE(fli.ISREQUIRED, 'false') AS is_required,
+    COALESCE(fli.ISHIDDEN, 'false') AS is_hidden,
+
+    -- [NEW] ALLOWED VALUES (Options)
+    -- Only applies if we found a valid options config
+    opt.allowed_values_str AS allowed_values
+
+FROM 
+    -- [Your Existing Joins for Project/Screen/IssueType]
+    JIRADCCT.nodeassociation na
+    JOIN JIRADCCT.project pr ON pr.id = na.source_node_id ...
+    ...
+    JOIN JIRADCCT.fieldscreenlayoutitem fsli ON fsli.FIELDSCREENTAB = fst.ID
+    
+    -- [Existing Custom Field ID Map]
+    LEFT JOIN CUSTOM_FIELD_MAP cf_map
+        ON fsli.FIELDIDENTIFIER = cf_map.generated_key
+
+    -- [NEW JOIN BLOCK FOR OPTIONS] --------------------------------
+    -- A. Determine the Context Scheme (Project Specific vs Global)
+    LEFT JOIN PROJECT_CONTEXT_MAP pcm 
+        ON pcm.project_id = pr.ID 
+        AND pcm.customfield_id = 'customfield_' || cf_map.cf_id
+    LEFT JOIN GLOBAL_CONTEXT_MAP gcm 
+        ON gcm.customfield_id = 'customfield_' || cf_map.cf_id
+    
+    -- B. Determine the final Scheme ID (Project wins, fallback to Global)
+    -- We use a CROSS APPLY-like logic in join conditions or calculated here
+    -- (Simplified by calculating the resolved Scheme ID in the ON clause below)
+
+    -- C. Link Scheme to Config (Specific Issue Type vs Default)
+    LEFT JOIN CONFIG_ID_RESOLVER cir_specific
+        ON cir_specific.scheme_id = COALESCE(pcm.scheme_id, gcm.scheme_id)
+        AND cir_specific.issue_type_id = it.ID
+    LEFT JOIN CONFIG_ID_RESOLVER cir_default
+        ON cir_default.scheme_id = COALESCE(pcm.scheme_id, gcm.scheme_id)
+        AND cir_default.issue_type_id IS NULL
+
+    -- D. Finally, Join the Options using the resolved Config ID
+    LEFT JOIN OPTIONS_AGG opt
+        ON opt.config_id = COALESCE(cir_specific.config_id, cir_default.config_id)
+    ----------------------------------------------------------------
+
+WHERE
+    COALESCE(fli.ISHIDDEN, 'false') = 'false'
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
