@@ -845,5 +845,38 @@ OPTIONS_AGG AS (
     GROUP BY cfo.CUSTOMFIELDCONFIG
 )
 
+SELECT 
+    gc.DATAKEY AS config_id,
+    gc.XMLVALUE AS default_value_raw
+FROM JIRADCCT.genericconfiguration gc
+WHERE gc.DATAKEY IN (
+    -- OPTIONAL: Filter to only the config IDs you care about
+    -- (e.g., extracted from your Step 1 results)
+    SELECT DISTINCT fcsit.FIELDCONFIGURATION
+    FROM JIRADCCT.fieldconfigschemeissuetype fcsit
+)
+
+
+# 1. Load your SQL data
+field_rows = db.execute(query_1)  # Your main project list
+options_map = db.execute(query_2) # Config_ID -> { OptionID: Label }
+defaults_map = db.execute(query_3) # Config_ID -> RawValue
+
+for field in field_rows:
+    config_id = field['options_config_id']
+    
+    # Check if a default exists for this config
+    if config_id in defaults_map:
+        raw_val = defaults_map[config_id]
+        
+        # LOGIC: Is it an ID or Text?
+        # Check if we have options for this config
+        if config_id in options_map and raw_val in options_map[config_id]:
+             # It's an ID (e.g., "1001") -> Resolve to Label (e.g., "High")
+             field['default_value'] = options_map[config_id][raw_val]
+        else:
+             # It's just text (e.g., "Bug Template")
+             field['default_value'] = raw_val
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
