@@ -569,5 +569,90 @@ async def process_text_conversational(request: OrchestratorRequest):
         "jira_key": jira_key,
     }
 
+
+    WITH FIELD_CONFIG_MAPPING AS (
+    -- This CTE calculates which Field Configuration (Layout) applies to each Project + Issue Type
+    SELECT 
+        pr.ID AS project_id,
+        it.ID AS issue_type_id,
+        -- If a specific mapping exists for this issue type, use it; otherwise use the scheme's default (NULL issuetype)
+        COALESCE(flse_specific.FIELDLAYOUT, flse_default.FIELDLAYOUT) AS field_layout_id
+    FROM 
+        JIRADCCT.project pr
+        CROSS JOIN JIRADCCT.issuetype it
+        -- 1. Get the Project's Field Config Scheme
+        JOIN JIRADCCT.nodeassociation na 
+            ON pr.ID = na.source_node_id 
+            AND na.sink_node_entity = 'FieldLayoutScheme'
+            AND na.association_type = 'ProjectScheme'
+        -- 2. Try to find a specific config for this Issue Type
+        LEFT JOIN JIRADCCT.fieldlayoutschemeentity flse_specific 
+            ON na.sink_node_id = flse_specific.SCHEME 
+            AND flse_specific.ISSUETYPE = it.ID
+        -- 3. Get the Default config for the scheme (IssueType is NULL)
+        LEFT JOIN JIRADCCT.fieldlayoutschemeentity flse_default 
+            ON na.sink_node_id = flse_default.SCHEME 
+            AND flse_default.ISSUETYPE IS NULL
+)
+SELECT 
+    pr.pkey AS project_key,
+    it.pname AS issue_type_name,
+    fs.name AS screen_name,
+    -- Field Information
+    fsli.FIELDIDENTIFIER AS field_id,
+    
+    -- 1. GET FIELD NAME (UI LABEL)
+    CASE 
+        WHEN cf.cfname IS NOT NULL THEN cf.cfname
+        WHEN fsli.FIELDIDENTIFIER = 'summary' THEN 'Summary'
+        WHEN fsli.FIELDIDENTIFIER = 'description' THEN 'Description'
+        WHEN fsli.FIELDIDENTIFIER = 'priority' THEN 'Priority'
+        WHEN fsli.FIELDIDENTIFIER = 'assignee' THEN 'Assignee'
+        WHEN fsli.FIELDIDENTIFIER = 'reporter' THEN 'Reporter'
+        WHEN fsli.FIELDIDENTIFIER = 'duedate' THEN 'Due Date'
+        WHEN fsli.FIELDIDENTIFIER = 'issuelinks' THEN 'Linked Issues'
+        WHEN fsli.FIELDIDENTIFIER = 'components' THEN 'Component/s'
+        WHEN fsli.FIELDIDENTIFIER = 'fixVersions' THEN 'Fix Version/s'
+        ELSE INITCAP(fsli.FIELDIDENTIFIER) 
+    END AS field_name,
+
+    -- 2. IS FIELD REQUIRED? (From Field Config)
+    -- If no row in layout item, default is FALSE
+    COALESCE(fli.ISREQUIRED, 'false') AS is_required,
+
+    -- 3. IS FIELD HIDDEN? (From Field Config)
+    -- If no row in layout item, default is FALSE (Visible)
+    COALESCE(fli.ISHIDDEN, 'false') AS is_hidden
+
+FROM 
+    JIRADCCT.nodeassociation na
+    -- Standard Screen Scheme Joins (From your previous step)
+    JOIN JIRADCCT.project pr ON pr.id = na.source_node_id AND na.association_type = 'ProjectScheme' AND na.sink_node_entity = 'IssueTypeScreenScheme'
+    JOIN JIRADCCT.issuetypescreenscheme its ON na.sink_node_id = its.ID
+    JOIN JIRADCCT.issuetypescreenschemeentity itse ON its.ID = itse.SCHEME
+    JOIN JIRADCCT.issuetype it ON itse.ISSUETYPE = it.ID
+    JOIN JIRADCCT.fieldscreenscheme fss ON itse.FIELDSCREENSCHEME = fss.ID
+    JOIN JIRADCCT.fieldscreenschemeitem fssi ON fssi.FIELDSCREENSCHEME = fss.ID
+    JOIN JIRADCCT.fieldscreen fs ON fssi.FIELDSCREEN = fs.ID
+    JOIN JIRADCCT.fieldscreentab fst ON fst.FIELDSCREEN = fs.ID
+    JOIN JIRADCCT.fieldscreenlayoutitem fsli ON fsli.FIELDSCREENTAB = fst.ID
+    
+    -- JOIN CUSTOM FIELDS (For Names)
+    LEFT JOIN JIRADCCT.customfield cf 
+        ON fsli.FIELDIDENTIFIER LIKE 'customfield_%'
+        AND cf.ID = CAST(SUBSTR(fsli.FIELDIDENTIFIER, 13) AS NUMBER)
+
+    -- JOIN FIELD CONFIGURATION (For Required/Hidden)
+    LEFT JOIN FIELD_CONFIG_MAPPING fcm
+        ON pr.ID = fcm.project_id 
+        AND it.ID = fcm.issue_type_id
+    LEFT JOIN JIRADCCT.fieldlayoutitem fli
+        ON fcm.field_layout_id = fli.FIELDLAYOUT
+        AND fli.FIELDIDENTIFIER = fsli.FIELDIDENTIFIER
+
+WHERE
+    -- CRITICAL: To mimic the API, we usually filter out hidden fields
+    COALESCE(fli.ISHIDDEN, 'false') = 'false'
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
