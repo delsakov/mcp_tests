@@ -799,5 +799,51 @@ FROM
 WHERE
     COALESCE(fli.ISHIDDEN, 'false') = 'false'
 
+
+-- 1. RESOLVE CONTEXT: Link Project + Custom Field -> Field Config Scheme
+-- Jira looks for a Project-specific context first. If not found, it uses Global (Project = NULL).
+PROJECT_CONTEXT_MAP AS (
+    SELECT 
+        cc.PROJECT AS project_id,
+        cc.CUSTOMFIELD AS customfield_id,
+        cc.FIELDCONFIGSCHEME AS scheme_id
+    FROM JIRADCCT.configurationcontext cc
+    WHERE cc.PROJECT IS NOT NULL
+),
+GLOBAL_CONTEXT_MAP AS (
+    SELECT 
+        cc.CUSTOMFIELD AS customfield_id,
+        cc.FIELDCONFIGSCHEME AS scheme_id
+    FROM JIRADCCT.configurationcontext cc
+    WHERE cc.PROJECT IS NULL
+),
+
+-- 2. RESOLVE CONFIG: Link Scheme + Issue Type -> Actual Config ID
+-- This handles the "Issue Type" scoping within a context
+CONFIG_ID_RESOLVER AS (
+    SELECT 
+        fcse.SCHEME AS scheme_id,
+        fcse.ISSUETYPE AS issue_type_id,
+        fcse.FIELDCONFIG AS config_id
+    FROM JIRADCCT.fieldconfigschemeentity fcse
+),
+
+-- 3. AGGREGATE OPTIONS: Get all options for a specific Config ID
+-- We use XMLAGG because LISTAGG fails if options exceed 4000 characters
+OPTIONS_AGG AS (
+    SELECT 
+        cfo.CUSTOMFIELDCONFIG AS config_id,
+        RTRIM(
+            XMLAGG(
+                XMLELEMENT(E, cfo.customvalue || ', ') 
+                ORDER BY cfo.sequence, cfo.customvalue
+            ).EXTRACT('//text()').GetClobVal(), 
+            ', '
+        ) AS allowed_values_str
+    FROM JIRADCCT.customfieldoption cfo
+    WHERE cfo.DISABLED = 'N'
+    GROUP BY cfo.CUSTOMFIELDCONFIG
+)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
