@@ -1010,6 +1010,18 @@ if __name__ == "__main__":
     print(df_result.to_json(orient='records', indent=2))
 
 
+-- QUERY 2: Raw Options Data (No Aggregation)
+-- We fetch ID and ParentID so we can reconstruct the tree later
+SELECT 
+    CAST(cfo.CUSTOMFIELDCONFIG AS CHAR(20)) AS config_id,
+    CAST(cfo.ID AS CHAR(20)) AS option_id,
+    CAST(cfo.PARENTOPTIONID AS CHAR(20)) AS parent_id,
+    cfo.CUSTOMVALUE AS value
+FROM JIRADCCT.customfieldoption cfo
+WHERE cfo.DISABLED = 'N'
+ORDER BY cfo.SEQUENCE, cfo.CUSTOMVALUE
+
+
 def generate_jql_aliases(row):
     """
     Generates standard JQL clause names.
