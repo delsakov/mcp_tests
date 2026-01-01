@@ -1009,5 +1009,25 @@ if __name__ == "__main__":
     
     print(df_result.to_json(orient='records', indent=2))
 
+
+def generate_jql_aliases(row):
+    """
+    Generates standard JQL clause names.
+    - Custom Field: ['My Field', 'cf[10001]']
+    - System Field: ['summary']
+    """
+    f_id = str(row['field_id'])
+    f_name = str(row['name'])
+    
+    if f_id.startswith('customfield_'):
+        # Extract numeric ID: customfield_10001 -> 10001
+        numeric_id = f_id.split('_')[1]
+        return [f_name, f"cf[{numeric_id}]"]
+    else:
+        # System field (e.g. 'summary', 'priority')
+        # Use the ID as the JQL name. 
+        # (You can add specific overrides here if needed, e.g. if field_id='issuetype' -> 'issuetype')
+        return [f_id]
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
