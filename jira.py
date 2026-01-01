@@ -878,5 +878,136 @@ for field in field_rows:
              # It's just text (e.g., "Bug Template")
              field['default_value'] = raw_val
 
+
+import pandas as pd
+import xml.etree.ElementTree as ET
+import json
+
+# ==========================================
+# 1. HELPER: XML PARSER (Same as before)
+# ==========================================
+def parse_jira_xml(xml_val):
+    """Parses Jira XML string into a value or list."""
+    if pd.isna(xml_val) or not isinstance(xml_val, str):
+        return None
+    try:
+        root = ET.fromstring(f"<root>{xml_val}</root>")
+        vals = [c.text for c in root.iter() if c.tag in ('string', 'long', 'boolean') and c.text]
+        if not vals: return None
+        return vals[0] if len(vals) == 1 else vals
+    except:
+        return xml_val
+
+def resolve_default(row):
+    """
+    Pandas Row Logic:
+    Resolves the final default value by checking if the 'parsed_default' 
+    exists inside 'allowed_values'.
+    """
+    raw_def = row.get('parsed_default')
+    options = row.get('allowed_values')
+
+    if raw_def is None:
+        return None
+
+    # If we have options (Dropdown/Multi-select), try to resolve names
+    if isinstance(options, list) and options:
+        # Case A: Default is a list (Multi-select)
+        if isinstance(raw_def, list):
+            # Return raw_def; in a real app, you might map IDs to Names here 
+            # if Query 2 returned a dict {id:name} instead of a list.
+            return raw_def
+        
+        # Case B: Default is a single value, check if it exists in options
+        if raw_def in options:
+            return raw_def
+        
+        # Case C: Default is an ID (e.g. '1001') not in options (e.g. ['Bug', 'Task'])
+        # If your Query 2 returns just Names, this mismatch is expected for IDs.
+        # You would return raw_def (the ID) or None depending on preference.
+        return raw_def
+
+    # If no options (Text field), just return the text
+    return raw_def
+
+# ==========================================
+# 2. MAIN PANDAS PIPELINE
+# ==========================================
+def process_jira_fields_pandas(db_results_main, db_results_options, db_results_defaults):
+    
+    # --- Step A: Load DataFrames ---
+    df_main = pd.DataFrame(db_results_main)
+    df_opt  = pd.DataFrame(db_results_options)
+    df_def  = pd.DataFrame(db_results_defaults)
+
+    # Ensure config_id is string in all DFs to avoid join mismatches
+    df_main['options_config_id'] = df_main['options_config_id'].astype(str)
+    if not df_opt.empty:
+        df_opt['config_id'] = df_opt['config_id'].astype(str)
+    if not df_def.empty:
+        df_def['config_id'] = df_def['config_id'].astype(str)
+
+    # --- Step B: Process Options (JSON Parse) ---
+    # Convert JSON string "['A','B']" -> Python List ['A','B']
+    if not df_opt.empty:
+        # Vectorized JSON load isn't native, but apply is clean
+        df_opt['allowed_values'] = df_opt['json_val'].apply(
+            lambda x: json.loads(x) if isinstance(x, str) else []
+        )
+        # Drop the raw json string to save memory
+        df_opt = df_opt[['config_id', 'allowed_values']]
+
+    # --- Step C: Process Defaults (XML Parse) ---
+    # Convert XML "<string>Val</string>" -> Python String "Val"
+    if not df_def.empty:
+        df_def['parsed_default'] = df_def['raw_xml'].apply(parse_jira_xml)
+        df_def = df_def[['config_id', 'parsed_default']]
+
+    # --- Step D: The Vectorized Merge (Left Joins) ---
+    # 1. Join Options onto Main
+    if not df_opt.empty:
+        df_merged = pd.merge(df_main, df_opt, left_on='options_config_id', right_on='config_id', how='left')
+    else:
+        df_merged = df_main.copy()
+        df_merged['allowed_values'] = None
+
+    # 2. Join Defaults onto Result
+    if not df_def.empty:
+        df_merged = pd.merge(df_merged, df_def, left_on='options_config_id', right_on='config_id', how='left', suffixes=('', '_def'))
+    else:
+        df_merged['parsed_default'] = None
+
+    # --- Step E: Resolve Final Default Value ---
+    # We apply the logic row-by-row to handle the dependency between 'parsed_default' and 'allowed_values'
+    df_merged['final_default_value'] = df_merged.apply(resolve_default, axis=1)
+
+    # Cleanup: Select only relevant columns
+    final_cols = ['project_key', 'issue_type', 'field_id', 'name', 'allowed_values', 'final_default_value']
+    # Filter to ensure cols exist (in case df is empty)
+    existing_cols = [c for c in final_cols if c in df_merged.columns]
+    
+    return df_merged[existing_cols]
+
+# ==========================================
+# 3. TEST EXECUTION
+# ==========================================
+if __name__ == "__main__":
+    # Mock Data (Simulating DB Results)
+    mock_main = [
+        {'project_key': 'A', 'issue_type': 'Bug', 'field_id': 'f1', 'name': 'City', 'options_config_id': '100'},
+        {'project_key': 'A', 'issue_type': 'Bug', 'field_id': 'f2', 'name': 'Summary', 'options_config_id': '101'}
+    ]
+    mock_opts = [
+        {'config_id': '100', 'json_val': '["NY", "London", "Tokyo"]'}
+    ]
+    mock_defs = [
+        {'config_id': '100', 'raw_xml': '<string>NY</string>'},
+        {'config_id': '101', 'raw_xml': '<string>My Default Summary</string>'}
+    ]
+
+    df_result = process_jira_fields_pandas(mock_main, mock_opts, mock_defs)
+    
+    print(df_result.to_json(orient='records', indent=2))
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
