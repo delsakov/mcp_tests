@@ -182,3 +182,73 @@ async def stream_chat(request: ChatRequest):
 @app.get("/")
 def read_root():
     return {"message": "JIRA Agent API is running. POST to /chat/stream to interact."}
+
+
+
+WITH ProjectIssueTypes AS (
+    -- 1. Get the valid Issue Types for each Project (same as your previous logic)
+    SELECT 
+        p.id AS project_id, 
+        p.pkey, 
+        it.id AS issuetype_id, 
+        it.pname AS issuetype_name
+    FROM project p
+    JOIN configurationcontext cc ON p.id = cc.project
+    JOIN fieldconfigscheme fcs ON cc.fieldconfigscheme = fcs.id
+    JOIN fieldconfigschemeissuetype fcsit ON fcs.id = fcsit.fieldconfigscheme
+    JOIN optionconfiguration oc ON fcsit.fieldconfiguration = oc.fieldconfig
+    JOIN issuetype it ON oc.optionid = it.id
+    WHERE fcs.fieldid = 'issuetype'
+),
+FieldConfigSchemeMap AS (
+    -- 2. Find which Field Configuration Scheme is assigned to the Project
+    -- Note: sinkNodeEntity is 'FieldLayoutScheme'
+    SELECT 
+        na.sourceNodeId AS project_id, 
+        na.sinkNodeId AS scheme_id
+    FROM nodeassociation na
+    WHERE na.sinkNodeEntity = 'FieldLayoutScheme' 
+),
+EffectiveFieldLayout AS (
+    -- 3. Calculate the effective Field Configuration (Layout) for each Issue Type
+    -- Logic: If a specific mapping exists for the Issue Type, use it. 
+    -- If not, use the Scheme's default (where issuetype IS NULL).
+    SELECT 
+        pit.project_id,
+        pit.issuetype_id,
+        COALESCE(flse_specific.fieldlayout, flse_default.fieldlayout) AS fieldlayout_id
+    FROM ProjectIssueTypes pit
+    JOIN FieldConfigSchemeMap fcsm ON pit.project_id = fcsm.project_id
+    LEFT JOIN fieldlayoutschemeentity flse_specific 
+        ON fcsm.scheme_id = flse_specific.scheme 
+        AND flse_specific.issuetype = CAST(pit.issuetype_id AS VARCHAR) -- Cast often needed depending on DB vendor
+    LEFT JOIN fieldlayoutschemeentity flse_default 
+        ON fcsm.scheme_id = flse_default.scheme 
+        AND flse_default.issuetype IS NULL
+)
+SELECT 
+    p.pkey AS "Project Key",
+    it.pname AS "Issue Type",
+    -- Attempt to get readable name: Custom Field Name OR System Field ID
+    CASE 
+        WHEN cf.cfname IS NOT NULL THEN cf.cfname 
+        ELSE fli.fieldidentifier 
+    END AS "Field Name",
+    CASE 
+        WHEN fli.isrequired = 'true' THEN 'Required' 
+        ELSE 'Optional' 
+    END AS "Requirement"
+FROM EffectiveFieldLayout efl
+JOIN project p ON efl.project_id = p.id
+JOIN issuetype it ON efl.issuetype_id = it.id
+-- Join the items in the configuration
+JOIN fieldlayoutitem fli ON efl.fieldlayout_id = fli.fieldlayout
+-- Join Custom Fields to get their names (System fields will be null here)
+LEFT JOIN customfield cf ON 'customfield_' || CAST(cf.id AS VARCHAR) = fli.fieldidentifier
+WHERE 
+    -- We generally only care about fields that are NOT hidden
+    (fli.ishidden IS NULL OR fli.ishidden != 'true')
+ORDER BY 
+    p.pkey, 
+    it.pname, 
+    "Field Name";
