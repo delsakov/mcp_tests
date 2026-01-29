@@ -254,3 +254,60 @@ ORDER BY
     es.issuetype_name, 
     fst.sequence, 
     fsli.sequence;
+
+
+WITH ProjectIssueTypes AS (
+    -- 1. Get Valid Issue Types per Project
+    SELECT 
+        p.id AS project_id,
+        p.pkey,
+        it.id AS issuetype_id,
+        it.pname AS issuetype_name
+    FROM JIRADC.project p
+    JOIN JIRADC.configurationcontext cc ON p.id = cc.project
+    JOIN JIRADC.fieldconfigscheme fcs ON cc.fieldconfigscheme = fcs.id
+    JOIN JIRADC.fieldconfigschemeissuetype fcsit ON fcs.id = fcsit.fieldconfigscheme
+    JOIN JIRADC.optionconfiguration oc ON fcsit.fieldconfiguration = oc.fieldconfig
+    JOIN JIRADC.issuetype it ON oc.optionid = it.id
+    WHERE fcs.fieldid = 'issuetype'
+),
+WorkflowMap AS (
+    -- 2. Determine which Workflow Name is used
+    SELECT 
+        pit.project_id,
+        pit.pkey,
+        pit.issuetype_name,
+        COALESCE(wse.workflowname, ws.defaultworkflow) AS workflow_name
+    FROM ProjectIssueTypes pit
+    JOIN JIRADC.nodeassociation na ON pit.project_id = na.sourceNodeId 
+        AND na.sinkNodeEntity = 'WorkflowScheme'
+    JOIN JIRADC.workflowscheme ws ON na.sinkNodeId = ws.id
+    LEFT JOIN JIRADC.workflowschemeentity wse 
+        ON ws.id = wse.scheme 
+        AND wse.issuetype = CAST(pit.issuetype_id AS VARCHAR2(20))
+)
+-- 3. Parse XML and Join Statuses
+SELECT DISTINCT
+    wm.pkey AS "Project Key",
+    wm.issuetype_name AS "Issue Type",
+    ist.pname AS "Status Name",
+    CASE 
+        WHEN ist.statuscategory = 2 THEN 'To Do'
+        WHEN ist.statuscategory = 4 THEN 'In Progress'
+        WHEN ist.statuscategory = 3 THEN 'Done'
+        ELSE 'No Category' 
+    END AS "Status Category"
+FROM WorkflowMap wm
+JOIN JIRADC.jiraworkflows jw ON wm.workflow_name = jw.workflowname
+-- Oracle XML Parsing: Extract Step nodes
+CROSS JOIN XMLTABLE(
+    '/workflow/steps/step'
+    PASSING XMLTYPE(jw.descriptor)
+    COLUMNS 
+        linkedStatusId VARCHAR2(50) PATH '@linkedStatus'
+) xml_step
+JOIN JIRADC.issuestatus ist ON ist.id = xml_step.linkedStatusId
+ORDER BY 
+    wm.pkey, 
+    wm.issuetype_name, 
+    "Status Category";
