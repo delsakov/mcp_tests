@@ -277,19 +277,39 @@ WorkflowMap AS (
         pit.project_id,
         pit.pkey,
         pit.issuetype_name,
-        COALESCE(wse.workflowname, ws.defaultworkflow) AS workflow_name
+        -- LOGIC FIX: Coalesce the specific mapping vs the default (NULL) mapping
+        COALESCE(wse_specific.workflow, wse_default.workflow) AS workflow_name
     FROM ProjectIssueTypes pit
+    -- Link Project to Workflow Scheme
     JOIN JIRADC.nodeassociation na ON pit.project_id = na.sourceNodeId 
         AND na.sinkNodeEntity = 'WorkflowScheme'
     JOIN JIRADC.workflowscheme ws ON na.sinkNodeId = ws.id
-    LEFT JOIN JIRADC.workflowschemeentity wse 
-        ON ws.id = wse.scheme 
-        AND wse.issuetype = CAST(pit.issuetype_id AS VARCHAR2(20))
+    -- Link 1: Try to find a specific workflow for this issue type
+    LEFT JOIN JIRADC.workflowschemeentity wse_specific 
+        ON ws.id = wse_specific.scheme 
+        AND wse_specific.issuetype = CAST(pit.issuetype_id AS VARCHAR2(255))
+    -- Link 2: Find the default workflow (where issuetype is NULL)
+    LEFT JOIN JIRADC.workflowschemeentity wse_default 
+        ON ws.id = wse_default.scheme 
+        AND wse_default.issuetype IS NULL
+),
+ParsedWorkflowStatuses AS (
+    -- 3. Parse XML to get Status IDs linked to Steps
+    SELECT 
+        jw.workflowname,
+        xml_step.linkedStatusId
+    FROM JIRADC.jiraworkflows jw,
+    XMLTABLE(
+        '/workflow/steps/step'
+        PASSING XMLTYPE(jw.descriptor)
+        COLUMNS 
+            linkedStatusId VARCHAR2(50) PATH '@linkedStatus'
+    ) xml_step
 )
--- 3. Parse XML and Join Statuses
 SELECT DISTINCT
     wm.pkey AS "Project Key",
     wm.issuetype_name AS "Issue Type",
+    wm.workflow_name AS "Workflow Name",
     ist.pname AS "Status Name",
     CASE 
         WHEN ist.statuscategory = 2 THEN 'To Do'
@@ -298,16 +318,133 @@ SELECT DISTINCT
         ELSE 'No Category' 
     END AS "Status Category"
 FROM WorkflowMap wm
-JOIN JIRADC.jiraworkflows jw ON wm.workflow_name = jw.workflowname
--- Oracle XML Parsing: Extract Step nodes
-CROSS JOIN XMLTABLE(
-    '/workflow/steps/step'
-    PASSING XMLTYPE(jw.descriptor)
-    COLUMNS 
-        linkedStatusId VARCHAR2(50) PATH '@linkedStatus'
-) xml_step
-JOIN JIRADC.issuestatus ist ON ist.id = xml_step.linkedStatusId
+JOIN ParsedWorkflowStatuses pws ON wm.workflow_name = pws.workflowname
+JOIN JIRADC.issuestatus ist ON ist.id = pws.linkedStatusId
 ORDER BY 
     wm.pkey, 
     wm.issuetype_name, 
     "Status Category";
+
+
+    WITH WorkflowMap AS (
+    -- 1. Map Project & Issue Type -> Workflow Name (Fixed Logic)
+    SELECT 
+        p.pkey,
+        it.pname AS issuetype_name,
+        -- LOGIC FIX: Coalesce specific vs default entity row
+        COALESCE(wse_specific.workflow, wse_default.workflow) AS workflow_name
+    FROM JIRADC.project p
+    JOIN JIRADC.configurationcontext cc ON p.id = cc.project
+    JOIN JIRADC.fieldconfigscheme fcs ON cc.fieldconfigscheme = fcs.id
+    JOIN JIRADC.fieldconfigschemeissuetype fcsit ON fcs.id = fcsit.fieldconfigscheme
+    JOIN JIRADC.optionconfiguration oc ON fcsit.fieldconfiguration = oc.fieldconfig
+    JOIN JIRADC.issuetype it ON oc.optionid = it.id
+    JOIN JIRADC.nodeassociation na ON p.id = na.sourceNodeId 
+        AND na.sinkNodeEntity = 'WorkflowScheme'
+    JOIN JIRADC.workflowscheme ws ON na.sinkNodeId = ws.id
+    -- Join specific workflow mapping
+    LEFT JOIN JIRADC.workflowschemeentity wse_specific 
+        ON ws.id = wse_specific.scheme 
+        AND wse_specific.issuetype = CAST(it.id AS VARCHAR2(255))
+    -- Join default workflow mapping
+    LEFT JOIN JIRADC.workflowschemeentity wse_default 
+        ON ws.id = wse_default.scheme 
+        AND wse_default.issuetype IS NULL
+    WHERE fcs.fieldid = 'issuetype'
+),
+RawWorkflowSteps AS (
+    -- 2. Create Map: Step ID -> Status ID (To resolve destinations)
+    SELECT 
+        jw.workflowname,
+        xml_step.stepId,
+        xml_step.linkedStatusId
+    FROM JIRADC.jiraworkflows jw,
+    XMLTABLE(
+        '/workflow/steps/step'
+        PASSING XMLTYPE(jw.descriptor)
+        COLUMNS 
+            stepId VARCHAR2(50) PATH '@id',
+            linkedStatusId VARCHAR2(50) PATH '@linkedStatus'
+    ) xml_step
+    WHERE jw.workflowname IN (SELECT DISTINCT workflow_name FROM WorkflowMap)
+),
+RegularTransitions AS (
+    -- 3a. Extract Regular Transitions (Step -> Step)
+    SELECT 
+        jw.workflowname,
+        xml_step.linkedStatusId AS source_status_id,
+        xml_action.transition_name,
+        xml_action.target_step_id,
+        'Regular' AS transition_type
+    FROM JIRADC.jiraworkflows jw,
+    XMLTABLE(
+        '/workflow/steps/step'
+        PASSING XMLTYPE(jw.descriptor)
+        COLUMNS 
+            linkedStatusId VARCHAR2(50) PATH '@linkedStatus',
+            actionsXml XMLTYPE PATH 'actions'
+    ) xml_step,
+    XMLTABLE(
+        '/actions/action'
+        PASSING xml_step.actionsXml
+        COLUMNS 
+            transition_name VARCHAR2(100) PATH '@name',
+            target_step_id VARCHAR2(50) PATH 'results/unconditional-result/@step'
+    ) xml_action
+    WHERE jw.workflowname IN (SELECT DISTINCT workflow_name FROM WorkflowMap)
+),
+GlobalTransitions AS (
+    -- 3b. Extract Global Transitions (Any -> Step)
+    SELECT 
+        jw.workflowname,
+        NULL AS source_status_id,
+        xml_action.transition_name,
+        xml_action.target_step_id,
+        'Global' AS transition_type
+    FROM JIRADC.jiraworkflows jw,
+    XMLTABLE(
+        '/workflow/global-actions/action'
+        PASSING XMLTYPE(jw.descriptor)
+        COLUMNS 
+            transition_name VARCHAR2(100) PATH '@name',
+            target_step_id VARCHAR2(50) PATH 'results/unconditional-result/@step'
+    ) xml_action
+    WHERE jw.workflowname IN (SELECT DISTINCT workflow_name FROM WorkflowMap)
+),
+AllTransitions AS (
+    SELECT * FROM RegularTransitions
+    UNION ALL
+    SELECT * FROM GlobalTransitions
+)
+-- 4. Final Join
+SELECT 
+    wm.pkey AS "Project Key",
+    wm.issuetype_name AS "Issue Type",
+    wm.workflow_name AS "Workflow Name",
+    
+    -- Source Status
+    COALESCE(stat_source.pname, '(Any Status)') AS "From Status",
+    
+    -- Transition
+    at.transition_name AS "Transition Name",
+    at.transition_type AS "Type",
+    
+    -- Destination Status
+    stat_dest.pname AS "To Status"
+
+FROM WorkflowMap wm
+JOIN AllTransitions at ON wm.workflow_name = at.workflowname
+-- Join Source Status
+LEFT JOIN JIRADC.issuestatus stat_source ON at.source_status_id = stat_source.id
+-- Join Destination Status (Lookup Target Step -> Target Status)
+LEFT JOIN RawWorkflowSteps rws_dest 
+    ON at.workflowname = rws_dest.workflowname 
+    AND at.target_step_id = rws_dest.stepId
+LEFT JOIN JIRADC.issuestatus stat_dest 
+    ON rws_dest.linkedStatusId = stat_dest.id
+
+ORDER BY 
+    wm.pkey, 
+    wm.issuetype_name, 
+    "From Status" NULLS FIRST, 
+    "Transition Name";
