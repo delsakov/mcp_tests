@@ -448,3 +448,65 @@ ORDER BY
     wm.issuetype_name, 
     "From Status" NULLS FIRST, 
     "Transition Name";
+
+
+
+SELECT DISTINCT
+    p.pkey AS "Project Key",
+    p.pname AS "Project Name",
+    pr.pname AS "Priority Name",
+    pr.description AS "Description",
+    pr.sequence AS "Order Sequence",
+    pr.id AS "Priority ID"
+FROM JIRADC.project p
+-- 1. Link Project to Configuration Context
+JOIN JIRADC.configurationcontext cc ON p.id = cc.project
+-- 2. Link Context to the Priority Scheme
+JOIN JIRADC.fieldconfigscheme fcs ON cc.fieldconfigscheme = fcs.id
+-- 3. Link Scheme to the Configuration Mapping
+JOIN JIRADC.fieldconfigschemeissuetype fcsit ON fcs.id = fcsit.fieldconfigscheme
+-- 4. Link Configuration to Selected Options (Priorities)
+JOIN JIRADC.optionconfiguration oc ON fcsit.fieldconfiguration = oc.fieldconfig
+-- 5. Link Options to the actual Priority table
+JOIN JIRADC.priority pr ON oc.optionid = pr.id
+WHERE 
+    fcs.fieldid = 'priority' -- Vital filter to exclude Issue Type schemes
+ORDER BY 
+    p.pkey, 
+    pr.sequence;
+
+WITH ProjectPrioritySchemes AS (
+    -- Get Projects that have a specific scheme assigned
+    SELECT 
+        p.id AS project_id,
+        oc.optionid AS priority_id
+    FROM JIRADC.project p
+    JOIN JIRADC.configurationcontext cc ON p.id = cc.project
+    JOIN JIRADC.fieldconfigscheme fcs ON cc.fieldconfigscheme = fcs.id
+    JOIN JIRADC.fieldconfigschemeissuetype fcsit ON fcs.id = fcsit.fieldconfigscheme
+    JOIN JIRADC.optionconfiguration oc ON fcsit.fieldconfiguration = oc.fieldconfig
+    WHERE fcs.fieldid = 'priority'
+),
+GlobalPriorities AS (
+    -- Get all priorities for the fallback
+    SELECT id FROM JIRADC.priority
+)
+SELECT 
+    p.pkey AS "Project Key",
+    pr.pname AS "Priority Name",
+    pr.sequence AS "Sequence"
+FROM JIRADC.project p
+-- Join to the specific scheme map
+LEFT JOIN ProjectPrioritySchemes pps ON p.id = pps.project_id
+-- Join to the priority table
+JOIN JIRADC.priority pr 
+    ON pr.id = COALESCE(pps.priority_id, pr.id) -- Logic: Use specific ID if exists, otherwise join on itself (all)
+WHERE 
+    -- If specific scheme exists, only show those matches
+    (pps.project_id IS NOT NULL AND pr.id = pps.priority_id)
+    OR 
+    -- If NO specific scheme exists, show ALL priorities (Global Default)
+    (pps.project_id IS NULL)
+ORDER BY 
+    p.pkey, 
+    pr.sequence;
