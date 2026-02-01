@@ -506,7 +506,112 @@ WHERE
     (pps.project_id IS NOT NULL AND pr.id = pps.priority_id)
     OR 
     -- If NO specific scheme exists, show ALL priorities (Global Default)
-    (pps.project_id IS NULL)
+    (pps.project_id IS NULL);
+
+
+    WITH WorkflowMap AS (
+    -- 1. Map Project & Issue Type -> Workflow Name
+    SELECT 
+        p.pkey,
+        it.pname AS issuetype_name,
+        COALESCE(wse_specific.workflow, wse_default.workflow) AS workflow_name
+    FROM JIRADC.project p
+    JOIN JIRADC.configurationcontext cc ON p.id = cc.project
+    JOIN JIRADC.fieldconfigscheme fcs ON cc.fieldconfigscheme = fcs.id
+    JOIN JIRADC.fieldconfigschemeissuetype fcsit ON fcs.id = fcsit.fieldconfigscheme
+    JOIN JIRADC.optionconfiguration oc ON fcsit.fieldconfiguration = oc.fieldconfig
+    JOIN JIRADC.issuetype it ON oc.optionid = it.id
+    JOIN JIRADC.nodeassociation na ON p.id = na.sourceNodeId 
+        AND na.sinkNodeEntity = 'WorkflowScheme'
+    JOIN JIRADC.workflowscheme ws ON na.sinkNodeId = ws.id
+    LEFT JOIN JIRADC.workflowschemeentity wse_specific 
+        ON ws.id = wse_specific.scheme 
+        AND wse_specific.issuetype = CAST(it.id AS VARCHAR2(255))
+    LEFT JOIN JIRADC.workflowschemeentity wse_default 
+        ON ws.id = wse_default.scheme 
+        AND wse_default.issuetype IS NULL
+    WHERE fcs.fieldid = 'issuetype'
+),
+RawWorkflowSteps AS (
+    -- 2. Map Step ID -> Status ID
+    SELECT 
+        jw.workflowname,
+        xml_step.stepId,
+        xml_step.linkedStatusId
+    FROM JIRADC.jiraworkflows jw,
+    XMLTABLE(
+        '/workflow/steps/step'
+        PASSING XMLTYPE(jw.descriptor)
+        COLUMNS 
+            stepId VARCHAR2(50) PATH '@id',
+            linkedStatusId VARCHAR2(50) PATH '@linkedStatus'
+    ) xml_step
+    WHERE jw.workflowname IN (SELECT DISTINCT workflow_name FROM WorkflowMap)
+),
+RawTransitions AS (
+    -- 3. Extract Transitions AND Check for Validators
+    SELECT 
+        jw.workflowname,
+        xml_step.linkedStatusId AS source_status_id,
+        xml_action.transition_name,
+        xml_action.target_step_id,
+        -- Check if a validator exists for 'resolution'
+        CASE 
+            WHEN XMLEXISTS(
+                '//validator[contains(@type, "FieldRequiredValidator")]/arg[text()="resolution" or @name="fieldId" and text()="resolution"]'
+                PASSING xml_action.validatorsXml
+            ) THEN 'REQUIRED'
+            ELSE 'Optional'
+        END AS resolution_requirement
+    FROM JIRADC.jiraworkflows jw,
+    XMLTABLE(
+        '/workflow/steps/step'
+        PASSING XMLTYPE(jw.descriptor)
+        COLUMNS 
+            linkedStatusId VARCHAR2(50) PATH '@linkedStatus',
+            actionsXml XMLTYPE PATH 'actions'
+    ) xml_step,
+    XMLTABLE(
+        '/actions/action'
+        PASSING xml_step.actionsXml
+        COLUMNS 
+            transition_name VARCHAR2(100) PATH '@name',
+            target_step_id VARCHAR2(50) PATH 'results/unconditional-result/@step',
+            validatorsXml XMLTYPE PATH 'validators'
+    ) xml_action
+    WHERE jw.workflowname IN (SELECT DISTINCT workflow_name FROM WorkflowMap)
+)
+SELECT DISTINCT
+    wm.pkey AS "Project Key",
+    wm.issuetype_name AS "Issue Type",
+    
+    -- From Status
+    stat_source.pname AS "From Status",
+    
+    -- Transition
+    rt.transition_name AS "Transition Name",
+    
+    -- Is Resolution Required?
+    rt.resolution_requirement AS "Resolution Field",
+    
+    -- To Status
+    stat_dest.pname AS "To Status"
+
+FROM WorkflowMap wm
+JOIN RawTransitions rt ON wm.workflow_name = rt.workflowname
+JOIN JIRADC.issuestatus stat_source ON rt.source_status_id = stat_source.id
+-- Resolve Destination Status
+LEFT JOIN RawWorkflowSteps rws_dest 
+    ON rt.workflowname = rws_dest.workflowname 
+    AND rt.target_step_id = rws_dest.stepId
+LEFT JOIN JIRADC.issuestatus stat_dest 
+    ON rws_dest.linkedStatusId = stat_dest.id
+-- Filter to show only 'REQUIRED' if you want to declutter, or keep all to see the map
+WHERE rt.resolution_requirement = 'REQUIRED'
+ORDER BY 
+    wm.pkey, 
+    wm.issuetype_name, 
+    stat_source.pname;
 ORDER BY 
     p.pkey, 
     pr.sequence;
