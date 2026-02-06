@@ -76,7 +76,17 @@ class ModelConfig:
 # ============================================================================
 
 class GPTOSSTokens:
-    """Token definitions for GPT-OSS model format"""
+    """
+    Token definitions for GPT-OSS model format
+    
+    The model response includes EVERYTHING:
+    1. Auto-generated system prompt (we ignore this)
+    2. Developer instructions (converted from user's "system" role)
+    3. Full conversation history
+    4. New assistant response (analysis, commentary, final)
+    
+    We parse and separate all of these.
+    """
     
     # Message structure tokens
     START = "|start|>"
@@ -114,7 +124,10 @@ class GPTOSSTokens:
         knowledge_cutoff: str = "2024-06",
         current_date: Optional[str] = None
     ) -> str:
-        """Format the system prompt with reasoning level"""
+        """
+        Format a system prompt (OPTIONAL - model auto-generates this)
+        Only use if you need to override the model's default system prompt.
+        """
         if current_date is None:
             current_date = time.strftime("%Y-%m-%d")
         
@@ -135,9 +148,157 @@ class GPTOSSTokens:
         return f"{cls.START}{cls.DEVELOPER}{cls.MESSAGE}# Instructions\n{instructions}{cls.END}"
     
     @classmethod
+    def parse_full_response(cls, text: str) -> Dict[str, Any]:
+        """
+        Parse the FULL GPT-OSS response into structured components
+        
+        Returns:
+            {
+                "system_prompt": str or None,      # Auto-generated (usually ignored)
+                "developer_instructions": str or None,  # User's system->developer
+                "history": [                       # Conversation history
+                    {"role": "user", "content": "..."},
+                    {"role": "assistant", "content": "...", "channel": "final"},
+                    ...
+                ],
+                "response": {                      # NEW assistant response
+                    "analysis": str or None,
+                    "commentary": str or None,
+                    "final": str or None,
+                },
+                "raw": str                         # Original text
+            }
+        """
+        result = {
+            "system_prompt": None,
+            "developer_instructions": None,
+            "history": [],
+            "response": {
+                "analysis": None,
+                "commentary": None,
+                "final": None,
+            },
+            "raw": text
+        }
+        
+        # Extract all message blocks
+        all_messages = cls._extract_all_messages(text)
+        
+        # Process each message
+        history_messages = []
+        last_user_index = -1
+        
+        # Find the last user message index
+        for i, msg in enumerate(all_messages):
+            if msg["role"] == "user":
+                last_user_index = i
+        
+        for i, msg in enumerate(all_messages):
+            role = msg["role"]
+            content = msg["content"]
+            channel = msg.get("channel")
+            
+            if role == "system":
+                # Auto-generated system prompt - store but typically ignored
+                result["system_prompt"] = content
+                
+            elif role == "developer":
+                # Developer instructions (converted from user's "system" role)
+                # Remove "# Instructions\n" prefix if present
+                if content.startswith("# Instructions\n"):
+                    content = content[len("# Instructions\n"):].strip()
+                elif content.startswith("# Instructions"):
+                    content = content[len("# Instructions"):].strip()
+                result["developer_instructions"] = content
+                
+            elif role == "user":
+                # User messages go to history
+                history_messages.append({
+                    "role": "user",
+                    "content": content
+                })
+                
+            elif role == "assistant":
+                if i > last_user_index:
+                    # This is part of the NEW response (after last user message)
+                    if channel and channel.lower() in cls.VALID_CHANNELS:
+                        result["response"][channel.lower()] = content
+                    else:
+                        # No channel specified, treat as final
+                        result["response"]["final"] = content
+                else:
+                    # This is history (before or at last user message)
+                    history_messages.append({
+                        "role": "assistant",
+                        "content": content,
+                        "channel": channel
+                    })
+        
+        result["history"] = history_messages
+        
+        return result
+    
+    @classmethod
+    def _extract_all_messages(cls, text: str) -> List[Dict[str, Any]]:
+        """
+        Extract all message blocks from the response in order
+        
+        Returns list of:
+            {"role": str, "content": str, "channel": str or None}
+        """
+        messages = []
+        
+        # Pattern for messages WITH channel (assistant)
+        # |start|>assistant<|channel|>CHANNEL<|message|>CONTENT<|end|>
+        pattern_with_channel = (
+            r'\|start\|>(\w+)<\|channel\|>(\w+)<\|message\|>'
+            r'(.*?)'
+            r'(?:<\|end\|>|<\|return\|>)'
+        )
+        
+        # Pattern for messages WITHOUT channel (system, developer, user)
+        # |start|>ROLE<|message|>CONTENT<|end|>
+        pattern_without_channel = (
+            r'\|start\|>(\w+)<\|message\|>'
+            r'(.*?)'
+            r'(?:<\|end\|>|<\|return\|>)'
+        )
+        
+        # Find all matches with their positions
+        matches_with_channel = [
+            (m.start(), {
+                "role": m.group(1),
+                "channel": m.group(2),
+                "content": m.group(3).strip()
+            })
+            for m in re.finditer(pattern_with_channel, text, re.DOTALL)
+        ]
+        
+        matches_without_channel = [
+            (m.start(), {
+                "role": m.group(1),
+                "channel": None,
+                "content": m.group(2).strip()
+            })
+            for m in re.finditer(pattern_without_channel, text, re.DOTALL)
+            # Exclude matches that are actually part of channel pattern
+            if "<|channel|>" not in text[m.start():m.start()+50]
+        ]
+        
+        # Combine and sort by position
+        all_matches = matches_with_channel + matches_without_channel
+        all_matches.sort(key=lambda x: x[0])
+        
+        # Extract just the message dicts
+        messages = [m[1] for m in all_matches]
+        
+        return messages
+    
+    @classmethod
     def parse_response(cls, text: str) -> Dict[str, Any]:
         """
-        Parse GPT-OSS response into channels
+        Parse GPT-OSS response - returns only the NEW response part
+        (for backward compatibility)
         
         Returns:
             {
@@ -147,44 +308,14 @@ class GPTOSSTokens:
                 "raw": str
             }
         """
-        result = {
-            "analysis": None,
-            "commentary": None,
-            "final": None,
+        full = cls.parse_full_response(text)
+        
+        return {
+            "analysis": full["response"]["analysis"],
+            "commentary": full["response"]["commentary"],
+            "final": full["response"]["final"] or "",
             "raw": text
         }
-        
-        # Pattern to match channel blocks
-        # |start|>assistant<|channel|>CHANNEL_NAME<|message|>CONTENT<|end|>
-        pattern = (
-            r'\|start\|>assistant<\|channel\|>(\w+)<\|message\|>'
-            r'(.*?)'
-            r'(?:<\|end\|>|<\|return\|>|\|start\|>|$)'
-        )
-        
-        matches = re.findall(pattern, text, re.DOTALL)
-        
-        for channel, content in matches:
-            channel_lower = channel.lower()
-            if channel_lower in cls.VALID_CHANNELS:
-                # Clean up the content
-                content = content.strip()
-                # Remove any trailing tokens
-                content = re.sub(r'<\|(?:end|return)\|>.*$', '', content, flags=re.DOTALL).strip()
-                result[channel_lower] = content
-        
-        # If no structured output found, try simpler patterns
-        if not any([result["analysis"], result["commentary"], result["final"]]):
-            # Try to find just the final answer
-            final_pattern = r'final<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|$)'
-            final_match = re.search(final_pattern, text, re.DOTALL)
-            if final_match:
-                result["final"] = final_match.group(1).strip()
-            else:
-                # Just use the whole text as final
-                result["final"] = text.strip()
-        
-        return result
 
 
 # ============================================================================
@@ -266,12 +397,34 @@ class ThinkingContent(BaseModel):
     raw: str = Field("", description="Combined raw thinking text")
 
 
+class HistoryMessage(BaseModel):
+    """A message from conversation history"""
+    role: str
+    content: str
+    channel: Optional[str] = None
+
+
+class ParsedResponse(BaseModel):
+    """Fully parsed GPT-OSS response"""
+    # Auto-generated by model (usually ignored)
+    system_prompt: Optional[str] = Field(None, description="Auto-generated system prompt (ignored)")
+    # User's system instructions converted to developer
+    developer_instructions: Optional[str] = Field(None, description="Developer instructions (from user's system role)")
+    # Conversation history echoed back
+    history: List[HistoryMessage] = Field(default_factory=list, description="Conversation history")
+    # The actual new response
+    analysis: Optional[str] = Field(None, description="Analysis/reasoning channel")
+    commentary: Optional[str] = Field(None, description="Commentary channel")
+    final: Optional[str] = Field(None, description="Final answer")
+
+
 class ChatMessage(BaseModel):
-    """Response message with channel separation"""
+    """Response message with full parsing"""
     role: str = "assistant"
     content: str = Field(..., description="Final answer content")
     thinking: Optional[ThinkingContent] = Field(None, description="Separated thinking content")
-    channels: Optional[Dict[str, str]] = Field(None, description="All channel outputs")
+    # Full parsed structure for GPT-OSS
+    parsed: Optional[ParsedResponse] = Field(None, description="Full parsed response structure")
 
 
 class Choice(BaseModel):
@@ -506,30 +659,17 @@ class ModelManager:
         """Build prompt in GPT-OSS format with channels"""
         parts = []
         
-        # Check if there's a system message in the request
-        has_system = any(m.role == "system" for m in request.messages)
-        
-        # Add system prompt with reasoning level if not provided
-        if not has_system:
-            parts.append(GPTOSSTokens.format_system_prompt(
-                instructions="",
-                reasoning=request.reasoning
-            ))
-        
-        # Add developer instructions if provided
+        # Add developer instructions if provided (before other messages)
         if request.developer_instructions:
             parts.append(GPTOSSTokens.format_developer_instructions(
                 request.developer_instructions
             ))
         
-        # Add messages
+        # Add messages - model auto-generates system prompt, we just format user messages
         for msg in request.messages:
             if msg.role == "system":
-                # Format system with reasoning level
-                content = msg.content
-                if "Reasoning:" not in content:
-                    content = f"{content}\n\nReasoning: {request.reasoning.value}"
-                parts.append(GPTOSSTokens.format_message("system", content))
+                # User-provided system instructions (optional override)
+                parts.append(GPTOSSTokens.format_message("system", msg.content))
             elif msg.role == "developer":
                 parts.append(GPTOSSTokens.format_developer_instructions(msg.content))
             elif msg.role == "user":
@@ -580,37 +720,44 @@ class ModelManager:
         else:
             return self._build_prompt_generic(request.messages)
     
-    def _parse_response(self, text: str, request: ChatCompletionRequest) -> tuple[str, Optional[ThinkingContent], Dict[str, str]]:
+    def _parse_response(self, text: str, request: ChatCompletionRequest) -> tuple[str, Optional[ThinkingContent], Optional[ParsedResponse]]:
         """Parse response based on model type"""
         
         if self.config.model_type == ModelType.GPT_OSS:
-            parsed = GPTOSSTokens.parse_response(text)
+            # Use full parser
+            full = GPTOSSTokens.parse_full_response(text)
             
             # Build thinking content from analysis and commentary
             thinking = None
-            if request.separate_thinking and (parsed["analysis"] or parsed["commentary"]):
+            response = full["response"]
+            
+            if request.separate_thinking and (response["analysis"] or response["commentary"]):
                 raw_parts = []
-                if parsed["analysis"]:
-                    raw_parts.append(f"[Analysis]\n{parsed['analysis']}")
-                if parsed["commentary"]:
-                    raw_parts.append(f"[Commentary]\n{parsed['commentary']}")
+                if response["analysis"]:
+                    raw_parts.append(f"[Analysis]\n{response['analysis']}")
+                if response["commentary"]:
+                    raw_parts.append(f"[Commentary]\n{response['commentary']}")
                 
                 thinking = ThinkingContent(
-                    analysis=parsed["analysis"],
-                    commentary=parsed["commentary"],
+                    analysis=response["analysis"],
+                    commentary=response["commentary"],
                     raw="\n\n".join(raw_parts)
                 )
             
             # Final content
-            final_content = parsed["final"] or ""
+            final_content = response["final"] or ""
             
-            # All channels
-            channels = {
-                k: v for k, v in parsed.items() 
-                if k in request.include_channels and v is not None
-            }
+            # Build parsed response structure
+            parsed = ParsedResponse(
+                system_prompt=full["system_prompt"],
+                developer_instructions=full["developer_instructions"],
+                history=[HistoryMessage(**h) for h in full["history"]],
+                analysis=response["analysis"],
+                commentary=response["commentary"],
+                final=response["final"]
+            )
             
-            return final_content, thinking, channels
+            return final_content, thinking, parsed
         
         else:
             # Generic parsing - look for common thinking patterns
@@ -630,7 +777,7 @@ class ModelManager:
                     raw=thinking_raw
                 )
             
-            return final_content, thinking, {"final": final_content}
+            return final_content, thinking, None
     
     async def generate(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         """Generate a completion"""
@@ -707,17 +854,23 @@ class ModelManager:
             finish_reason = "length"
         
         # Parse response
-        final_content, thinking, channels = self._parse_response(generated_text, request)
+        final_content, thinking, parsed = self._parse_response(generated_text, request)
         
         # Calculate channel tokens
         channel_tokens = {}
         thinking_tokens_count = 0
-        for ch_name, ch_content in channels.items():
-            if ch_content:
-                ch_token_count = len(self.tokenizer.encode(ch_content))
-                channel_tokens[ch_name] = ch_token_count
-                if ch_name in ["analysis", "commentary"]:
-                    thinking_tokens_count += ch_token_count
+        
+        if parsed:
+            if parsed.analysis:
+                ch_token_count = len(self.tokenizer.encode(parsed.analysis))
+                channel_tokens["analysis"] = ch_token_count
+                thinking_tokens_count += ch_token_count
+            if parsed.commentary:
+                ch_token_count = len(self.tokenizer.encode(parsed.commentary))
+                channel_tokens["commentary"] = ch_token_count
+                thinking_tokens_count += ch_token_count
+            if parsed.final:
+                channel_tokens["final"] = len(self.tokenizer.encode(parsed.final))
         
         # Handle response format
         if request.response_format:
@@ -735,7 +888,7 @@ class ModelManager:
             role="assistant",
             content=final_content,
             thinking=thinking,
-            channels=channels if request.separate_thinking else None
+            parsed=parsed if request.separate_thinking else None
         )
         
         choice = Choice(
@@ -785,13 +938,14 @@ class ModelManager:
         generated_ids = outputs[0][inputs.input_ids.shape[1]:]
         full_text = self.tokenizer.decode(generated_ids, skip_special_tokens=False)
         
-        # Parse into channels
+        # Parse into channels (this also cleans the response)
         if self.config.model_type == ModelType.GPT_OSS:
-            parsed = GPTOSSTokens.parse_response(full_text)
+            full = GPTOSSTokens.parse_full_response(full_text)
+            response = full["response"]
             
-            # Stream each channel separately
+            # Stream each channel separately (only the NEW response, not history)
             for channel in ["analysis", "commentary", "final"]:
-                content = parsed.get(channel)
+                content = response.get(channel)
                 if content and channel in request.include_channels:
                     # Send channel start marker
                     yield self._format_stream_chunk(response_id, created, "", channel, channel_start=True)
@@ -1054,11 +1208,22 @@ async def legacy_simple_chat(request: LegacyInferenceRequest):
     )
     response = await model_manager.generate(chat_request)
     msg = response.choices[0].message
-    return {
+    
+    result = {
         "response": msg.content,
         "thinking": msg.thinking.model_dump() if msg.thinking else None,
-        "channels": msg.channels
     }
+    
+    # Add parsed structure for GPT-OSS
+    if msg.parsed:
+        result["parsed"] = msg.parsed.model_dump()
+        result["history"] = [h.model_dump() for h in msg.parsed.history]
+        result["developer_instructions"] = msg.parsed.developer_instructions
+        result["analysis"] = msg.parsed.analysis
+        result["commentary"] = msg.parsed.commentary
+        result["final"] = msg.parsed.final
+    
+    return result
 
 
 @app.post("/chat")
@@ -1072,11 +1237,22 @@ async def legacy_chat(request: LegacyChatRequest):
     )
     response = await model_manager.generate(chat_request)
     msg = response.choices[0].message
-    return {
+    
+    result = {
         "response": msg.content,
         "thinking": msg.thinking.model_dump() if msg.thinking else None,
-        "channels": msg.channels
     }
+    
+    # Add parsed structure for GPT-OSS
+    if msg.parsed:
+        result["parsed"] = msg.parsed.model_dump()
+        result["history"] = [h.model_dump() for h in msg.parsed.history]
+        result["developer_instructions"] = msg.parsed.developer_instructions
+        result["analysis"] = msg.parsed.analysis
+        result["commentary"] = msg.parsed.commentary
+        result["final"] = msg.parsed.final
+    
+    return result
 
 
 # ============================================================================
