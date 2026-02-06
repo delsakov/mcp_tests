@@ -1,0 +1,14 @@
+# Core dependencies
+torch>=2.0.0
+transformers>=4.40.0
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.0.0
+httpx>=0.26.0
+
+# Optional: for better performance
+accelerate>=0.27.0
+safetensors>=0.4.0
+
+# Optional: for flash attention (NVIDIA GPUs)
+# flash-attn>=2.5.0
