@@ -629,23 +629,46 @@ async def get_cluster_status():
 
 @app.get("/v1/models")
 async def list_models():
-    """List all available models across backends"""
+    """List all available models across registered backends"""
     status = load_balancer.get_status()
     
     models = []
+    seen = set()
+    
     for backend in status.backends:
         if backend.status == "healthy":
             for model in backend.models:
-                models.append({
-                    "id": model,
-                    "object": "model",
-                    "created": int(time.time()),
-                    "owned_by": backend.name,
-                    "backend": backend.name,
-                    "model_type": backend.model_type
-                })
+                if model not in seen:
+                    seen.add(model)
+                    models.append({
+                        "id": model,
+                        "object": "model",
+                        "created": int(time.time()),
+                        "owned_by": "local",
+                        "backend": backend.name,
+                        "backend_url": backend.url
+                    })
     
     return {"object": "list", "data": models}
+
+
+@app.get("/v1/models/{model_id}")
+async def get_model(model_id: str):
+    """Get info about a specific model"""
+    status = load_balancer.get_status()
+    
+    for backend in status.backends:
+        if backend.status == "healthy" and model_id in backend.models:
+            return {
+                "id": model_id,
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "local",
+                "backend": backend.name,
+                "backend_url": backend.url
+            }
+    
+    raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
 
 @app.post("/v1/chat/completions")
