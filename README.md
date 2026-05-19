@@ -1317,3 +1317,111 @@ No AWQ until RTN-like quantization works
 [4]: https://docs.vllm.ai/projects/llm-compressor/en/latest/examples/awq/ "AWQ Quantization - LLM Compressor Docs"
 [5]: https://docs.vllm.ai/projects/llm-compressor/en/latest/guides/compression_schemes/?utm_source=chatgpt.com "Compression Schemes - LLM Compressor Docs - vLLM"
 [6]: https://huggingface.co/mistralai/Mistral-Small-4-119B-2603 "mistralai/Mistral-Small-4-119B-2603 · Hugging Face"
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+will that work on A100-80 ?
+Thought for 21s
+
+No — do not force FLASH_ATTN_MLA on A100-80G.
+
+A100 is Ampere / compute capability 8.0, while vLLM’s MLA backend table lists FLASH_ATTN_MLA as compute capability 9.x only. The vLLM source also checks capability.major == 9 for FLASH_ATTN_MLA, which means Hopper-class GPUs like H100, not A100.
+
+For A100, use one of these instead:
+
+Safest: let vLLM auto-select
+vllm serve ./Mistral-Small-4-119B-2603-W4A16-gs64-routerBF16 \
+  --quantization compressed-tensors \
+  --dtype bfloat16 \
+  --max-model-len 8192 \
+  --gpu-memory-utilization 0.90 \
+  --max-num-batched-tokens 4096 \
+  --max-num-seqs 2
+Or explicitly force Triton MLA
+vllm serve ./Mistral-Small-4-119B-2603-W4A16-gs64-routerBF16 \
+  --quantization compressed-tensors \
+  --dtype bfloat16 \
+  --max-model-len 8192 \
+  --gpu-memory-utilization 0.90 \
+  --max-num-batched-tokens 4096 \
+  --max-num-seqs 2 \
+  --attention-config.backend=TRITON_MLA
+
+vLLM’s docs list TRITON_MLA as supporting MLA decode with compute capability Any, while FLASH_ATTN_MLA, FLASHMLA, and several other MLA backends are SM90/SM100-oriented.
+
+For standard non-MLA attention, regular FLASH_ATTN is fine on A100: vLLM lists FlashAttention FA2 as supported on compute capability >=8.0. But that is not the same thing as FLASH_ATTN_MLA.
+
+You can verify your GPU capability:
+
+python - <<'PY'
+import torch
+print(torch.cuda.get_device_name())
+print(torch.cuda.get_device_capability())
+PY
+
+Expected for A100:
+
+NVIDIA A100...
+(8, 0)
+
+Bottom line: for A100-80G, remove --attention-backend FLASH_ATTN_MLA. Start with auto backend selection, or force TRITON_MLA. Garbage output is unlikely to be fixed by changing this flag; if the model loads but generates nonsense, the more likely causes remain corrupted dequantized weights, wrong tensor split/rename, quantized router, or incompatible compressed-tensors metadata.
+
+will TRITON MLA work or that could be an issue that it produces garbage?
+Thought for 16s
+
+TRITON_MLA should not by itself produce garbage. If vLLM accepts it as a valid backend and the model loads, it is supposed to compute the same attention semantics as other MLA backends, just with different kernels/performance characteristics.
+
+The bigger risk is version/support mismatch, not silent semantic corruption. vLLM’s current attention-backend docs say manual backend selection is validated against dtype, head size, compute capability, etc.; if the selected backend is incompatible, vLLM should raise an error rather than run incorrectly. The same table lists TRITON_MLA for MLA decode with fp16/bf16, KV cache auto/float16/bfloat16/fp8/fp8_e4m3, block size multiple of 16, head sizes “Any”, and compute capability “Any”.
+
+So for A100-80G, I would treat TRITON_MLA as the correct fallback candidate.
+
+Use:
+
+vllm serve ./Mistral-Small-4-119B-2603-W4A16-gs64-routerBF16 \
+  --quantization compressed-tensors \
+  --dtype bfloat16 \
+  --max-model-len 4096 \
+  --gpu-memory-utilization 0.90 \
+  --max-num-batched-tokens 2048 \
+  --max-num-seqs 1 \
+  --kv-cache-dtype auto \
+  --attention-config.backend TRITON_MLA
+
+Or, depending on your vLLM CLI version:
+
+vllm serve ./Mistral-Small-4-119B-2603-W4A16-gs64-routerBF16 \
+  --quantization compressed-tensors \
+  --dtype bfloat16 \
+  --max-model-len 4096 \
+  --gpu-memory-utilization 0.90 \
+  --max-num-batched-tokens 2048 \
+  --max-num-seqs 1 \
+  --kv-cache-dtype auto \
+  -ac.backend TRITON_MLA
+
+I would not use FP8/TurboQuant KV cache while debugging. Keep:
+
+--kv-cache-dtype auto
+
+until the model generates clean text.
+
+There is one caveat: actual behavior depends heavily on the installed vLLM version. There is a recent open issue where Mistral-Small-4-119B-2603 on SM 8.6 failed during MLA backend selection with “No valid attention backend found,” and explicit FLASH_ATTN_MLA failed due to unsupported head size / compute capability. That issue was not specifically proof that TRITON_MLA produces bad output, but it shows that MLA support for this model on Ampere-class hardware is version-sensitive.
+
+My debugging order would be:
+
+Run with auto backend first, no KV quantization.
+If auto fails or selects an incompatible backend, force TRITON_MLA.
+If it starts but output is garbage, assume the cause is weights / quantization / tokenizer-chat-template / router quantization, not TRITON_MLA, unless the same quantized checkpoint works cleanly with another backend on H100.
+Confirm vLLM logs say something like Using TRITON_MLA or similar.
+
+For garbage output, the likely culprits remain:
+
+1. Bad FP8 -> BF16 conversion.
+2. Quantized MoE router: language_model.model.layers.*.mlp.gate.
+3. Wrong AWQ smoothing mappings for Mistral4 MLA module names.
+4. Wrong compressed-tensors metadata.
+5. Wrong chat template / processor handling.
+6. Trying KV quantization while debugging weight quantization.
+
+So yes: try TRITON_MLA on A100, but do not expect it to fix garbage caused by corrupted or badly quantized weights. If TRITON_MLA is incompatible, vLLM should fail loudly rather than silently generate nonsense.
+
