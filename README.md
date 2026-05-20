@@ -1425,3 +1425,189 @@ For garbage output, the likely culprits remain:
 
 So yes: try TRITON_MLA on A100, but do not expect it to fix garbage caused by corrupted or badly quantized weights. If TRITON_MLA is incompatible, vLLM should fail loudly rather than silently generate nonsense.
 
+
+
+
+
+format	mlx
+
+language_model.model.layers.34.input_layernorm.weight	[4 096]	
+BF16
+
+language_model.model.layers.34.mlp.shared_experts.down_proj.biases	[4 096, 32]	
+BF16
+
+language_model.model.layers.34.mlp.shared_experts.down_proj.scales	[4 096, 32]	
+BF16
+
+language_model.model.layers.34.mlp.shared_experts.down_proj.weight	[4 096, 256]	
+U32
+
+language_model.model.layers.34.mlp.shared_experts.gate_proj.biases	[2 048, 64]	
+BF16
+
+language_model.model.layers.34.mlp.shared_experts.gate_proj.scales	[2 048, 64]	
+BF16
+
+language_model.model.layers.34.mlp.shared_experts.gate_proj.weight	[2 048, 512]	
+U32
+
+language_model.model.layers.34.mlp.shared_experts.up_proj.biases	[2 048, 64]	
+BF16
+
+language_model.model.layers.34.mlp.shared_experts.up_proj.scales	[2 048, 64]	
+BF16
+
+language_model.model.layers.34.mlp.shared_experts.up_proj.weight	[2 048, 512]	
+U32
+
+language_model.model.layers.34.mlp.gate.weight	[128, 4 096]	
+BF16
+
+language_model.model.layers.34.mlp.switch_mlp.down_proj.biases	[128, 4 096, 32]	
+BF16
+
+language_model.model.layers.34.mlp.switch_mlp.down_proj.scales	[128, 4 096, 32]	
+BF16
+
+language_model.model.layers.34.mlp.switch_mlp.down_proj.weight	[128, 4 096, 256]	
+U32
+
+language_model.model.layers.34.post_attention_layernorm.weight	[4 096]	
+BF16
+
+language_model.model.layers.35.input_layernorm.weight	[4 096]	
+BF16
+
+language_model.model.layers.35.mlp.shared_experts.down_proj.biases	[4 096, 32]	
+BF16
+
+language_model.model.layers.35.mlp.shared_experts.down_proj.scales	[4 096, 32]	
+BF16
+
+language_model.model.layers.35.mlp.shared_experts.down_proj.weight	[4 096, 256]	
+U32
+
+language_model.model.layers.35.mlp.shared_experts.gate_proj.biases	[2 048, 64]	
+BF16
+
+language_model.model.layers.35.mlp.shared_experts.gate_proj.scales	[2 048, 64]	
+BF16
+
+language_model.model.layers.35.mlp.shared_experts.gate_proj.weight	[2 048, 512]	
+U32
+
+language_model.model.layers.35.mlp.shared_experts.up_proj.biases	[2 048, 64]	
+BF16
+
+language_model.model.layers.35.mlp.shared_experts.up_proj.scales	[2 048, 64]	
+BF16
+
+language_model.model.layers.35.mlp.shared_experts.up_proj.weight	[2 048, 512]	
+U32
+
+language_model.model.layers.35.mlp.gate.weight	[128, 4 096]	
+BF16
+
+language_model.model.layers.35.mlp.switch_mlp.down_proj.biases	[128, 4 096, 32]	
+BF16
+
+language_model.model.layers.35.mlp.switch_mlp.down_proj.scales	[128, 4 096, 32]	
+BF16
+
+language_model.model.layers.35.mlp.switch_mlp.down_proj.weight	[128, 4 096, 256]	
+U32
+
+language_model.model.layers.35.mlp.switch_mlp.gate_proj.biases	[128, 2 048, 64]	
+BF16
+
+language_model.model.layers.35.mlp.switch_mlp.gate_proj.scales	[128, 2 048, 64]	
+BF16
+
+language_model.model.layers.35.mlp.switch_mlp.gate_proj.weight	[128, 2 048, 512]	
+U32
+
+language_model.model.layers.35.mlp.switch_mlp.up_proj.biases	[128, 2 048, 64]	
+BF16
+
+language_model.model.layers.35.mlp.switch_mlp.up_proj.scales	[128, 2 048, 64]	
+BF16
+
+language_model.model.layers.35.mlp.switch_mlp.up_proj.weight	[128, 2 048, 512]	
+U32
+
+language_model.model.layers.35.post_attention_layernorm.weight	[4 096]	
+BF16
+
+language_model.model.layers.35.self_attn.embed_q.biases	[32, 256, 1]	
+BF16
+
+language_model.model.layers.35.self_attn.embed_q.scales	[32, 256, 1]	
+BF16
+
+language_model.model.layers.35.self_attn.embed_q.weight	[32, 256, 8]	
+U32
+
+language_model.model.layers.35.self_attn.unembed_out.biases	[32, 128, 4]	
+BF16
+
+language_model.model.layers.35.self_attn.unembed_out.scales	[32, 128, 4]	
+BF16
+
+language_model.model.layers.35.self_attn.unembed_out.weight	[32, 128, 32]	
+U32
+
+language_model.model.layers.35.self_attn.kv_a_layernorm.weight	[256]	
+BF16
+
+language_model.model.layers.35.self_attn.kv_a_proj_with_mqa.biases	[320, 64]	
+BF16
+
+language_model.model.layers.35.self_attn.kv_a_proj_with_mqa.scales	[320, 64]	
+BF16
+
+language_model.model.layers.35.self_attn.kv_a_proj_with_mqa.weight	[320, 512]	
+U32
+
+language_model.model.layers.35.self_attn.o_proj.biases	[4 096, 64]	
+BF16
+
+language_model.model.layers.35.self_attn.o_proj.scales	[4 096, 64]	
+BF16
+
+language_model.model.layers.35.self_attn.o_proj.weight	[4 096, 512]	
+U32
+
+language_model.model.layers.35.self_attn.q_a_layernorm.weight	[1 024]	
+BF16
+
+language_model.model.layers.35.self_attn.q_a_proj.biases	[1 024, 64]	
+BF16
+
+language_model.model.layers.35.self_attn.q_a_proj.scales	[1 024, 64]	
+BF16
+
+language_model.model.layers.35.self_attn.q_a_proj.weight	[1 024, 512]	
+U32
+
+language_model.model.layers.35.self_attn.q_b_proj.biases	[4 096, 16]	
+BF16
+
+language_model.model.layers.35.self_attn.q_b_proj.scales	[4 096, 16]	
+BF16
+
+language_model.model.layers.35.self_attn.q_b_proj.weight	[4 096, 128]	
+U32
+
+language_model.model.norm.weight	[4 096]	
+BF16
+
+language_model.lm_head.biases	[131 072, 64]	
+BF16
+
+language_model.lm_head.scales	[131 072, 64]	
+BF16
+
+language_model.lm_head.weight	[131 072, 512]	
+U32
+
