@@ -71,3 +71,57 @@ tokenizer.save_pretrained(save_path)
  * **auto_offload:** The 119B FP16 model is ~238 GB. This flag automatically stages layers between your disk, system CPU RAM, and the A100 VRAM, pulling them onto the GPU only when that specific layer is being calibrated.
  * **Format:** The resulting output will be saved in safetensors format with compressed-tensors metadata. vLLM can load this natively.
 Once quantized, the model footprint will drop to ~65 GB. You can then load it into vLLM alongside RotorQuant for your 3-bit KV cache.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+How to apply this to Gemma-4-31B-it
+You can build this exact pipeline using the llmcompressor library. Instead of just loading a single modifier, you stack the SpinQuantModifier on top of the QuantizationModifier in your recipe.
+
+Here is the exact Python recipe to apply SpinQuant + GPTQ to your Gemma-4 model:
+
+Python
+from llmcompressor.modifiers.experimental import SpinQuantModifier
+from llmcompressor.modifiers.quantization import QuantizationModifier
+from llmcompressor import oneshot
+
+# The Recipe Stack: Rotate first, then Quantize
+recipe = [
+    # Step 1: Smooth the outliers
+    SpinQuantModifier(
+        targets=["Linear"],
+        rotations=["R1", "R2"], # Apply to both weights and activations
+        transform_block_size=128, 
+        transform_type="hadamard"
+    ),
+    # Step 2: Compress using GPTQ
+    QuantizationModifier(
+        targets=["Linear"],
+        scheme="W4A16",      # 4-bit weights, 16-bit activations
+        algorithm="GPTQ",    # Explicitly enforce GPTQ calibration
+        ignore=["lm_head"],  # Protect the final output head
+        group_size=64        # Maintain the outlier cage for safety
+    )
+]
+
+# Execute the pipeline (requires a loaded model and calibration dataset)
+oneshot(
+    model=model,
+    dataset=calibration_dataset,
+    recipe=recipe,
+    max_seq_length=4096,
+    num_calibration_samples=512,
+)
+A Quick Deployment Note for Gemma-4
+Because Gemma-4 utilizes a unique Hybrid Attention architecture (mixing sliding window and global layers), the SpinQuantModifier needs to correctly read the head_dim from the model's config.json to calculate the rotation blocks. Make sure you are on the absolute latest nightly build of llmcompressor, as the community only recently patched the config parsing logic to fully support the newer Gemma variants.
